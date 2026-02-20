@@ -1,0 +1,21 @@
+# Environment
+.env
+.env.local
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/cache_forge/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
