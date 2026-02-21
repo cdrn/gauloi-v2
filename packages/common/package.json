@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
+    "generate-abis": "bash scripts/generate-abis.sh",
+    "build": "pnpm generate-abis && tsc",
     "test": "vitest run"
   },
   "dependencies": {
