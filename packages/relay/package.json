@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./server": "./dist/server.js"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",

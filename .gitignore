@@ -6,6 +6,7 @@
 contracts/out/
 contracts/cache/
 contracts/cache_forge/
+contracts/broadcast/
 
 # Node
 node_modules/

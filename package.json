@@ -4,6 +4,12 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
+    "test:e2e": "tsx scripts/e2e-test.ts",
     "lint": "pnpm -r lint"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.0",
+    "ws": "^8.18.0"
   }
 }
