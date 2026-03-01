@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { createIntent } from "./commands/create-intent.js";
 import { listIntents } from "./commands/list-intents.js";
+import { runMaker } from "./commands/run-maker.js";
 import { status } from "./commands/status.js";
 
 const program = new Command();
@@ -39,5 +40,23 @@ program
   .option("--rpc <url>", "RPC URL", process.env.ETHEREUM_RPC_URL)
   .option("--staking <address>", "Staking contract address")
   .action(status);
+
+program
+  .command("run-maker")
+  .description("Run a maker bot")
+  .option("--private-key <key>", "Maker private key", process.env.PRIVATE_KEY)
+  .requiredOption("--source-chain <chainId>", "Source chain ID")
+  .requiredOption("--dest-chain <chainId>", "Destination chain ID")
+  .option("--source-rpc <url>", "Source chain RPC URL")
+  .option("--dest-rpc <url>", "Destination chain RPC URL")
+  .option("--escrow <address>", "Escrow contract address override")
+  .option("--staking <address>", "Staking contract address override")
+  .option("--disputes <address>", "Disputes contract address override")
+  .option("--relay <url>", "Relay WebSocket URL", "ws://localhost:8080")
+  .option("--settle-interval <ms>", "Settlement check interval in ms", "30000")
+  .option("--spread-clean <bps>", "Spread for clean addresses (bps)", "30")
+  .option("--spread-unknown <bps>", "Spread for unknown addresses (bps)", "100")
+  .option("--max-fill <usdc>", "Maximum fill size in USDC", "10000")
+  .action(runMaker);
 
 program.parse();

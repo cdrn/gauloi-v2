@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@gauloi/common": "workspace:*",
+    "@gauloi/maker": "workspace:*",
     "commander": "^12.1.0",
     "viem": "^2.21.0",
     "ws": "^8.18.0"
