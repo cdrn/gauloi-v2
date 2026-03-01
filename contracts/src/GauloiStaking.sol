@@ -77,14 +77,16 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
         require(amount > 0, "GauloiStaking: zero amount");
         DataTypes.MakerInfo storage maker = _makers[msg.sender];
 
-        stakeTokenContract.safeTransferFrom(msg.sender, address(this), amount);
+        // Effects before interaction (CEI pattern)
         maker.stakedAmount += amount;
-
         if (!maker.isActive && maker.stakedAmount >= minStakeAmount) {
             maker.isActive = true;
         }
 
         emit Staked(msg.sender, amount);
+
+        // Interaction last
+        stakeTokenContract.safeTransferFrom(msg.sender, address(this), amount);
     }
 
     function requestUnstake(uint256 amount) external {
@@ -145,8 +147,12 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
 
     function decreaseExposure(address maker, uint256 amount) external onlyEscrowOrDisputes {
         DataTypes.MakerInfo storage info = _makers[maker];
-        require(info.activeExposure >= amount, "GauloiStaking: underflow");
-        info.activeExposure -= amount;
+        // Cap instead of revert — exposure may already be zeroed by slash()
+        if (info.activeExposure >= amount) {
+            info.activeExposure -= amount;
+        } else {
+            info.activeExposure = 0;
+        }
     }
 
     // --- Permissioned: called by Disputes ---

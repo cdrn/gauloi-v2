@@ -212,12 +212,15 @@ contract GauloiStakingTest is BaseTest {
         assertEq(staking.getMakerInfo(maker1).activeExposure, 20_000e6);
     }
 
-    function test_decreaseExposure_underflow_reverts() public {
+    function test_decreaseExposure_caps_at_zero() public {
         _stakeMaker(maker1, 50_000e6);
 
+        // No exposure to decrease — should cap at 0, not revert
         vm.prank(mockEscrow);
-        vm.expectRevert("GauloiStaking: underflow");
-        staking.decreaseExposure(maker1, 10_000e6); // No exposure to decrease
+        staking.decreaseExposure(maker1, 10_000e6);
+
+        DataTypes.MakerInfo memory info = staking.getMakerInfo(maker1);
+        assertEq(info.activeExposure, 0);
     }
 
     function test_availableCapacity() public {

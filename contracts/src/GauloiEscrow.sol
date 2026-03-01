@@ -104,9 +104,7 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
 
         require(_intents[intentId].taker == address(0), "GauloiEscrow: intent exists");
 
-        // Transfer tokens into escrow
-        IERC20(inputToken).safeTransferFrom(msg.sender, address(this), inputAmount);
-
+        // Effects before interaction (CEI pattern)
         _intents[intentId] = DataTypes.Intent({
             intentId: intentId,
             taker: msg.sender,
@@ -133,9 +131,12 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
             outputToken,
             minOutputAmount
         );
+
+        // Interaction last
+        IERC20(inputToken).safeTransferFrom(msg.sender, address(this), inputAmount);
     }
 
-    function commitToIntent(bytes32 intentId) external {
+    function commitToIntent(bytes32 intentId) external nonReentrant {
         DataTypes.Intent storage intent = _intents[intentId];
         require(intent.state == DataTypes.IntentState.Open, "GauloiEscrow: not open");
         require(block.timestamp < intent.expiry, "GauloiEscrow: intent expired");
@@ -151,7 +152,7 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
         emit IntentCommitted(intentId, msg.sender);
     }
 
-    function submitFill(bytes32 intentId, bytes32 destinationTxHash) external {
+    function submitFill(bytes32 intentId, bytes32 destinationTxHash) external nonReentrant {
         DataTypes.Intent storage intent = _intents[intentId];
         require(intent.state == DataTypes.IntentState.Committed, "GauloiEscrow: not committed");
         require(intent.maker == msg.sender, "GauloiEscrow: not committed maker");

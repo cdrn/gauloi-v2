@@ -58,6 +58,11 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         minDisputeBond = newMinBond;
     }
 
+    function withdrawTreasury(address to, uint256 amount) external onlyOwner nonReentrant {
+        require(to != address(0), "GauloiDisputes: zero address");
+        bondToken.safeTransfer(to, amount);
+    }
+
     // --- Dispute lifecycle ---
 
     function dispute(bytes32 intentId) external nonReentrant {
