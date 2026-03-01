@@ -31,3 +31,37 @@ Cross chain stablecoin swapping protocol with baked in compliance
 | Unstake cooldown | 5 minutes |
 | Dispute resolution window | 5 minutes |
 | Dispute bond | max(0.5% of fill, 0.1 USDC) |
+
+## Gas Costs
+
+Measured with `forge test --match-contract GasBenchmark --gas-report` (Solc 0.8.24, optimizer 200 runs).
+
+### GauloiStaking
+
+| Operation | Gas |
+|-----------|-----|
+| stake | 105,999 |
+| requestUnstake | 74,127 |
+| completeUnstake | 56,683 |
+
+### GauloiEscrow
+
+| Operation | Gas |
+|-----------|-----|
+| createIntent | 262,496 |
+| commitToIntent | 112,013 |
+| submitFill | 80,986 |
+| settle | 57,407 |
+| settleBatch (5) | 140,753 |
+| settleBatch (10) | 243,366 |
+| reclaimExpired | 67,915 |
+
+### GauloiDisputes
+
+| Operation | Gas |
+|-----------|-----|
+| dispute | 210,876 |
+| resolveDispute (1 sig) | 145,298 |
+| finalizeExpiredDispute | 132,505 |
+
+Run `forge snapshot --match-contract GasBenchmark --diff` to check for regressions.
