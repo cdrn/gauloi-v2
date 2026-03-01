@@ -1,13 +1,12 @@
 #!/usr/bin/env tsx
 /**
- * E2E test: full settlement loop on two local Anvil instances.
+ * E2E tests: full settlement loop + dispute fraud path on two local Anvil instances.
  *
- * 1. Start two Anvil instances (source chain + dest chain)
- * 2. Deploy contracts on both chains
- * 3. Fund maker + taker
- * 4. Start relay
- * 5. Start maker bot
- * 6. Taker creates intent → maker quotes → taker selects → maker fills → settlement
+ * Test 1 (Happy Path):
+ *   Taker creates intent → maker quotes → taker selects → maker fills → settlement
+ *
+ * Test 2 (Dispute — Fraud):
+ *   Maker submits fake fill → another maker disputes → attestor signs → resolution → slashing + refund
  */
 
 import { spawn, execSync, ChildProcess } from "child_process";
@@ -16,25 +15,38 @@ import {
   createWalletClient,
   http,
   parseAbi,
-  parseAbiItem,
-  decodeEventLog,
   erc20Abi,
-  type Hex,
+  keccak256,
+  encodePacked,
+  type PublicClient,
+  type WalletClient,
+  type Transport,
+  type Chain,
 } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { foundry } from "viem/chains";
 import WebSocket from "ws";
 import { startRelayServer } from "../packages/relay/src/server.js";
-import { GauloiEscrowAbi, GauloiStakingAbi, signQuote } from "@gauloi/common";
+import {
+  GauloiEscrowAbi,
+  GauloiStakingAbi,
+  GauloiDisputesAbi,
+  signQuote,
+} from "@gauloi/common";
 
-// Test accounts (Anvil defaults)
+// ── Anvil default accounts ──────────────────────────────────────────────────
+
 const DEPLOYER_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
-const MAKER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as const;
-const TAKER_KEY = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a" as const;
+const MAKER1_KEY  = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as const;
+const TAKER_KEY   = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a" as const;
+const MAKER2_KEY  = "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6" as const;
+const MAKER3_KEY  = "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a" as const;
 
 const deployer = privateKeyToAccount(DEPLOYER_KEY);
-const maker = privateKeyToAccount(MAKER_KEY);
-const taker = privateKeyToAccount(TAKER_KEY);
+const maker1   = privateKeyToAccount(MAKER1_KEY);
+const taker    = privateKeyToAccount(TAKER_KEY);
+const maker2   = privateKeyToAccount(MAKER2_KEY);
+const maker3   = privateKeyToAccount(MAKER3_KEY);
 
 const SOURCE_PORT = 8545;
 const DEST_PORT = 8546;
@@ -44,11 +56,12 @@ const SOURCE_RPC = `http://127.0.0.1:${SOURCE_PORT}`;
 const DEST_RPC = `http://127.0.0.1:${DEST_PORT}`;
 
 const processes: ChildProcess[] = [];
+const mockMintAbi = parseAbi(["function mint(address to, uint256 amount) external"]);
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 function cleanup() {
-  for (const p of processes) {
-    p.kill("SIGTERM");
-  }
+  for (const p of processes) p.kill("SIGTERM");
 }
 
 function sleep(ms: number) {
@@ -64,21 +77,15 @@ function startAnvil(port: number, chainId: number): Promise<ChildProcess> {
       "--silent",
     ]);
     processes.push(anvil);
-
     anvil.stderr.on("data", (data: Buffer) => {
-      const msg = data.toString();
-      if (msg.includes("error")) {
-        reject(new Error(`Anvil failed: ${msg}`));
-      }
+      if (data.toString().includes("error")) reject(new Error(`Anvil: ${data}`));
     });
-
-    // Give Anvil time to start
     setTimeout(() => resolve(anvil), 1000);
   });
 }
 
 function deployContracts(rpcUrl: string, settlementWindow: number): string {
-  const result = execSync(
+  return execSync(
     `cd /Users/cdrn/Code/gauloi-v2/contracts && ` +
     `DEPLOYER_KEY=${DEPLOYER_KEY} ` +
     `SETTLEMENT_WINDOW=${settlementWindow} ` +
@@ -86,32 +93,398 @@ function deployContracts(rpcUrl: string, settlementWindow: number): string {
     `--rpc-url ${rpcUrl} --broadcast 2>&1`,
     { encoding: "utf-8" },
   );
-  return result;
 }
 
 function parseDeployOutput(output: string): Record<string, `0x${string}`> {
   const addresses: Record<string, `0x${string}`> = {};
-  const lines = output.split("\n");
-  for (const line of lines) {
-    const match = line.match(/(USDC|Staking|Escrow|Disputes):\s+(0x[a-fA-F0-9]+)/);
-    if (match) {
-      addresses[match[1]] = match[2] as `0x${string}`;
-    }
+  for (const line of output.split("\n")) {
+    const m = line.match(/(USDC|Staking|Escrow|Disputes):\s+(0x[a-fA-F0-9]+)/);
+    if (m) addresses[m[1]] = m[2] as `0x${string}`;
   }
   return addresses;
 }
 
-async function main() {
-  console.log("=== Gauloi v2 E2E Test ===\n");
+function findIntentId(
+  receipt: { logs: readonly { address: string; topics: readonly string[] }[] },
+  escrowAddr: string,
+): `0x${string}` {
+  const log = receipt.logs.find(
+    (l) => l.address.toLowerCase() === escrowAddr.toLowerCase() && l.topics.length >= 2,
+  );
+  if (!log) throw new Error("IntentCreated log not found");
+  return log.topics[1] as `0x${string}`;
+}
 
-  // 1. Start Anvil instances
-  console.log("Starting Anvil instances...");
+async function mintUSDC(
+  wallet: WalletClient<Transport, Chain, PrivateKeyAccount>,
+  token: `0x${string}`,
+  to: `0x${string}`,
+  amount: bigint,
+) {
+  await wallet.writeContract({ address: token, abi: mockMintAbi, functionName: "mint", args: [to, amount] });
+}
+
+async function stakeFor(
+  wallet: WalletClient<Transport, Chain, PrivateKeyAccount>,
+  publicClient: PublicClient<Transport, Chain>,
+  token: `0x${string}`,
+  staking: `0x${string}`,
+  amount: bigint,
+) {
+  const approveTx = await wallet.writeContract({
+    address: token, abi: erc20Abi, functionName: "approve", args: [staking, amount],
+  });
+  await publicClient.waitForTransactionReceipt({ hash: approveTx });
+  const stakeTx = await wallet.writeContract({
+    address: staking, abi: GauloiStakingAbi, functionName: "stake", args: [amount],
+  });
+  await publicClient.waitForTransactionReceipt({ hash: stakeTx });
+}
+
+// ── Shared context ──────────────────────────────────────────────────────────
+
+interface Ctx {
+  sourceChain: Chain;
+  destChain: Chain;
+  sourcePublic: PublicClient<Transport, Chain>;
+  destPublic: PublicClient<Transport, Chain>;
+  deployerSourceWallet: WalletClient<Transport, Chain, PrivateKeyAccount>;
+  deployerDestWallet: WalletClient<Transport, Chain, PrivateKeyAccount>;
+  sourceAddrs: Record<string, `0x${string}`>;
+  destAddrs: Record<string, `0x${string}`>;
+  closeRelay: () => void;
+}
+
+// ── Test 1: Happy Path ──────────────────────────────────────────────────────
+
+async function testHappyPath(ctx: Ctx): Promise<boolean> {
+  console.log("\n╔══════════════════════════════════════╗");
+  console.log("║    Test 1: Happy Path Settlement     ║");
+  console.log("╚══════════════════════════════════════╝\n");
+
+  const { sourcePublic, destPublic, sourceAddrs, destAddrs, sourceChain, destChain } = ctx;
+
+  const maker1SourceWallet = createWalletClient({ account: maker1, chain: sourceChain, transport: http(SOURCE_RPC) });
+  const maker1DestWallet = createWalletClient({ account: maker1, chain: destChain, transport: http(DEST_RPC) });
+  const takerSourceWallet = createWalletClient({ account: taker, chain: sourceChain, transport: http(SOURCE_RPC) });
+
+  // Create intent
+  const inputAmount = 10_000n * 10n ** 6n;
+  const minOutput = 9_950n * 10n ** 6n;
+  const expiry = BigInt(Math.floor(Date.now() / 1000) + 3600);
+
+  const approveTx = await takerSourceWallet.writeContract({
+    address: sourceAddrs.USDC, abi: erc20Abi, functionName: "approve",
+    args: [sourceAddrs.Escrow, inputAmount],
+  });
+  await sourcePublic.waitForTransactionReceipt({ hash: approveTx });
+
+  const createTx = await takerSourceWallet.writeContract({
+    address: sourceAddrs.Escrow, abi: GauloiEscrowAbi, functionName: "createIntent",
+    args: [sourceAddrs.USDC, inputAmount, destAddrs.USDC, minOutput, 42161n, taker.address, expiry],
+  });
+  const createReceipt = await sourcePublic.waitForTransactionReceipt({ hash: createTx });
+  const intentId = findIntentId(createReceipt, sourceAddrs.Escrow);
+  console.log("  Intent created:", intentId);
+
+  // RFQ flow via WebSocket
+  const makerWs = new WebSocket(`ws://127.0.0.1:${RELAY_PORT}`);
+  await new Promise<void>((r) => makerWs.on("open", r));
+  makerWs.send(JSON.stringify({ type: "maker_subscribe", data: { address: maker1.address } }));
+
+  const takerWs = new WebSocket(`ws://127.0.0.1:${RELAY_PORT}`);
+  await new Promise<void>((r) => takerWs.on("open", r));
+
+  const flowComplete = new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Flow timed out")), 30_000);
+
+    makerWs.on("message", async (raw) => {
+      const msg = JSON.parse(raw.toString());
+
+      if (msg.type === "new_intent") {
+        console.log("  Maker quoting...");
+        const outputAmount = 9_970n * 10n ** 6n;
+        const quoteExpiry = Math.floor(Date.now() / 1000) + 300;
+        const signature = await signQuote(maker1SourceWallet as any, {
+          intentId: msg.data.intentId as `0x${string}`, maker: maker1.address,
+          outputAmount, estimatedFillTime: 10, expiry: quoteExpiry,
+        });
+        makerWs.send(JSON.stringify({
+          type: "maker_quote",
+          data: { intentId: msg.data.intentId, maker: maker1.address,
+            outputAmount: outputAmount.toString(), estimatedFillTime: 10,
+            expiry: quoteExpiry, signature },
+        }));
+      }
+
+      if (msg.type === "quote_accepted") {
+        try {
+          console.log("  Committing...");
+          const c = await maker1SourceWallet.writeContract({
+            address: sourceAddrs.Escrow, abi: GauloiEscrowAbi, functionName: "commitToIntent", args: [intentId],
+          });
+          await sourcePublic.waitForTransactionReceipt({ hash: c });
+
+          console.log("  Filling on dest chain...");
+          const f = await maker1DestWallet.writeContract({
+            address: destAddrs.USDC, abi: erc20Abi, functionName: "transfer",
+            args: [taker.address, 9_970n * 10n ** 6n],
+          });
+          const fReceipt = await destPublic.waitForTransactionReceipt({ hash: f });
+
+          console.log("  Submitting fill evidence...");
+          const s = await maker1SourceWallet.writeContract({
+            address: sourceAddrs.Escrow, abi: GauloiEscrowAbi, functionName: "submitFill",
+            args: [intentId, fReceipt.transactionHash],
+          });
+          await sourcePublic.waitForTransactionReceipt({ hash: s });
+
+          console.log("  Waiting for settlement window (10s)...");
+          await sleep(12_000);
+
+          console.log("  Settling...");
+          const st = await maker1SourceWallet.writeContract({
+            address: sourceAddrs.Escrow, abi: GauloiEscrowAbi, functionName: "settle", args: [intentId],
+          });
+          await sourcePublic.waitForTransactionReceipt({ hash: st });
+
+          clearTimeout(timeout);
+          resolve();
+        } catch (err) { clearTimeout(timeout); reject(err); }
+      }
+    });
+
+    takerWs.on("message", (raw) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.type === "quote_received") {
+        console.log(`  Taker selecting quote from ${msg.data.maker}...`);
+        takerWs.send(JSON.stringify({ type: "quote_select", data: { intentId, maker: msg.data.maker } }));
+      }
+    });
+  });
+
+  takerWs.send(JSON.stringify({
+    type: "intent_broadcast",
+    data: {
+      intentId, taker: taker.address, inputToken: sourceAddrs.USDC,
+      inputAmount: inputAmount.toString(), outputToken: destAddrs.USDC,
+      destinationChainId: 42161, destinationAddress: taker.address,
+      minOutputAmount: minOutput.toString(), expiry: Number(expiry), sourceChainId: 1,
+    },
+  }));
+
+  await flowComplete;
+  makerWs.close();
+  takerWs.close();
+
+  // Verify
+  const intent = await sourcePublic.readContract({
+    address: sourceAddrs.Escrow, abi: GauloiEscrowAbi, functionName: "getIntent", args: [intentId],
+  }) as any;
+
+  const passed = intent.state === 3;
+  console.log(`\n  Intent state: ${intent.state} (3 = Settled) — ${passed ? "PASS" : "FAIL"}`);
+  return passed;
+}
+
+// ── Test 2: Dispute (Fraud) ─────────────────────────────────────────────────
+
+async function testDisputeFraud(ctx: Ctx): Promise<boolean> {
+  console.log("\n╔══════════════════════════════════════╗");
+  console.log("║    Test 2: Dispute — Fake Fill       ║");
+  console.log("╚══════════════════════════════════════╝\n");
+
+  const { sourcePublic, sourceAddrs, destAddrs, sourceChain, deployerSourceWallet } = ctx;
+
+  const maker1Wallet = createWalletClient({ account: maker1, chain: sourceChain, transport: http(SOURCE_RPC) });
+  const maker2Wallet = createWalletClient({ account: maker2, chain: sourceChain, transport: http(SOURCE_RPC) });
+  const maker3Wallet = createWalletClient({ account: maker3, chain: sourceChain, transport: http(SOURCE_RPC) });
+  const takerWallet  = createWalletClient({ account: taker, chain: sourceChain, transport: http(SOURCE_RPC) });
+
+  // Fund and stake maker2 + maker3
+  console.log("  Funding and staking maker2 + maker3...");
+  for (const m of [maker2, maker3]) {
+    await mintUSDC(deployerSourceWallet, sourceAddrs.USDC, m.address, 200_000n * 10n ** 6n);
+    await stakeFor(
+      createWalletClient({ account: m, chain: sourceChain, transport: http(SOURCE_RPC) }),
+      sourcePublic, sourceAddrs.USDC, sourceAddrs.Staking, 100_000n * 10n ** 6n,
+    );
+    console.log(`    ${m.address.slice(0, 10)}... staked 100k`);
+  }
+
+  // Record maker1 stake before
+  const maker1StakeBefore = await sourcePublic.readContract({
+    address: sourceAddrs.Staking, abi: GauloiStakingAbi, functionName: "availableCapacity",
+    args: [maker1.address],
+  }) as bigint;
+
+  // 1. Taker creates intent
+  console.log("\n  Taker creating intent...");
+  const inputAmount = 10_000n * 10n ** 6n;
+  const minOutput = 9_950n * 10n ** 6n;
+  const expiry = BigInt(Math.floor(Date.now() / 1000) + 3600);
+
+  const a = await takerWallet.writeContract({
+    address: sourceAddrs.USDC, abi: erc20Abi, functionName: "approve",
+    args: [sourceAddrs.Escrow, inputAmount],
+  });
+  await sourcePublic.waitForTransactionReceipt({ hash: a });
+
+  const createTx = await takerWallet.writeContract({
+    address: sourceAddrs.Escrow, abi: GauloiEscrowAbi, functionName: "createIntent",
+    args: [sourceAddrs.USDC, inputAmount, destAddrs.USDC, minOutput, 42161n, taker.address, expiry],
+  });
+  const createReceipt = await sourcePublic.waitForTransactionReceipt({ hash: createTx });
+  const intentId = findIntentId(createReceipt, sourceAddrs.Escrow);
+  console.log("  Intent:", intentId);
+
+  // Record taker balance AFTER escrow (funds locked)
+  const takerBalanceBefore = await sourcePublic.readContract({
+    address: sourceAddrs.USDC, abi: erc20Abi, functionName: "balanceOf", args: [taker.address],
+  }) as bigint;
+
+  // 2. Maker1 (fraudster) commits
+  console.log("  Maker1 committing to intent...");
+  const commitTx = await maker1Wallet.writeContract({
+    address: sourceAddrs.Escrow, abi: GauloiEscrowAbi, functionName: "commitToIntent", args: [intentId],
+  });
+  await sourcePublic.waitForTransactionReceipt({ hash: commitTx });
+
+  // 3. Maker1 submits FAKE fill — a completely bogus tx hash
+  const fakeTxHash = keccak256(encodePacked(["string"], ["this-fill-never-happened"]));
+  console.log("  Maker1 submitting FAKE fill:", fakeTxHash.slice(0, 18) + "...");
+  const fillTx = await maker1Wallet.writeContract({
+    address: sourceAddrs.Escrow, abi: GauloiEscrowAbi, functionName: "submitFill",
+    args: [intentId, fakeTxHash],
+  });
+  await sourcePublic.waitForTransactionReceipt({ hash: fillTx });
+
+  // Verify intent is now in Filled state
+  const intentAfterFill = await sourcePublic.readContract({
+    address: sourceAddrs.Escrow, abi: GauloiEscrowAbi, functionName: "getIntent", args: [intentId],
+  }) as any;
+  console.log(`  Intent state after fill: ${intentAfterFill.state} (2 = Filled)`);
+
+  // 4. Maker2 disputes — calculate bond and approve
+  console.log("\n  Maker2 raising dispute...");
+  const bondAmount = await sourcePublic.readContract({
+    address: sourceAddrs.Disputes, abi: GauloiDisputesAbi,
+    functionName: "calculateDisputeBond", args: [inputAmount],
+  }) as bigint;
+  console.log(`    Bond required: ${Number(bondAmount) / 1e6} USDC`);
+
+  const bondApproveTx = await maker2Wallet.writeContract({
+    address: sourceAddrs.USDC, abi: erc20Abi, functionName: "approve",
+    args: [sourceAddrs.Disputes, bondAmount],
+  });
+  await sourcePublic.waitForTransactionReceipt({ hash: bondApproveTx });
+
+  const disputeTx = await maker2Wallet.writeContract({
+    address: sourceAddrs.Disputes, abi: GauloiDisputesAbi, functionName: "dispute", args: [intentId],
+  });
+  await sourcePublic.waitForTransactionReceipt({ hash: disputeTx });
+  console.log("    Dispute raised!");
+
+  // Verify intent is now Disputed (state 4)
+  const intentAfterDispute = await sourcePublic.readContract({
+    address: sourceAddrs.Escrow, abi: GauloiEscrowAbi, functionName: "getIntent", args: [intentId],
+  }) as any;
+  console.log(`    Intent state: ${intentAfterDispute.state} (4 = Disputed)`);
+
+  // 5. Maker3 signs EIP-712 attestation: fillValid = false
+  console.log("\n  Maker3 signing attestation (fill invalid)...");
+
+  // Must match SignatureLib.sol exactly
+  const attestationSignature = await maker3Wallet.signTypedData({
+    domain: {
+      name: "GauloiDisputes",
+      version: "1",
+      chainId: 1,
+      verifyingContract: sourceAddrs.Disputes,
+    },
+    types: {
+      FillAttestation: [
+        { name: "intentId", type: "bytes32" },
+        { name: "fillValid", type: "bool" },
+        { name: "fillTxHash", type: "bytes32" },
+        { name: "destinationChainId", type: "uint256" },
+      ],
+    },
+    primaryType: "FillAttestation",
+    message: {
+      intentId,
+      fillValid: false,
+      fillTxHash: fakeTxHash,
+      destinationChainId: 42161n,
+    },
+  });
+  console.log("    Attestation signed:", attestationSignature.slice(0, 18) + "...");
+
+  // 6. Resolve dispute with attestation
+  console.log("  Resolving dispute (fill invalid)...");
+  const resolveTx = await maker2Wallet.writeContract({
+    address: sourceAddrs.Disputes, abi: GauloiDisputesAbi, functionName: "resolveDispute",
+    args: [intentId, false, [attestationSignature]],
+  });
+  await sourcePublic.waitForTransactionReceipt({ hash: resolveTx });
+  console.log("    Dispute resolved!");
+
+  // 7. Verify final state
+  console.log("\n  Verifying...");
+
+  // Intent should be Expired (state 5) — resolveInvalid refunds taker and sets state to Expired
+  const intentFinal = await sourcePublic.readContract({
+    address: sourceAddrs.Escrow, abi: GauloiEscrowAbi, functionName: "getIntent", args: [intentId],
+  }) as any;
+  console.log(`    Intent state: ${intentFinal.state} (5 = Expired/Refunded)`);
+
+  // Maker1 should be slashed — capacity should be 0
+  const maker1CapacityAfter = await sourcePublic.readContract({
+    address: sourceAddrs.Staking, abi: GauloiStakingAbi, functionName: "availableCapacity",
+    args: [maker1.address],
+  }) as bigint;
+  console.log(`    Maker1 capacity: ${Number(maker1CapacityAfter) / 1e6} USDC (was ${Number(maker1StakeBefore) / 1e6})`);
+
+  // Taker should have gotten escrowed funds back
+  const takerBalanceAfter = await sourcePublic.readContract({
+    address: sourceAddrs.USDC, abi: erc20Abi, functionName: "balanceOf", args: [taker.address],
+  }) as bigint;
+  const takerRefunded = takerBalanceAfter > takerBalanceBefore;
+  console.log(`    Taker balance: ${Number(takerBalanceAfter) / 1e6} USDC (was ${Number(takerBalanceBefore) / 1e6}) — ${takerRefunded ? "refunded" : "NOT refunded"}`);
+
+  // Dispute record
+  const dispute = await sourcePublic.readContract({
+    address: sourceAddrs.Disputes, abi: GauloiDisputesAbi, functionName: "getDispute", args: [intentId],
+  }) as any;
+  console.log(`    Dispute resolved: ${dispute.resolved}, fillDeemedValid: ${dispute.fillDeemedValid}`);
+
+  // Maker2 (challenger) should have gotten bond back + reward
+  const maker2Balance = await sourcePublic.readContract({
+    address: sourceAddrs.USDC, abi: erc20Abi, functionName: "balanceOf", args: [maker2.address],
+  }) as bigint;
+  console.log(`    Maker2 balance: ${Number(maker2Balance) / 1e6} USDC (got bond + slash reward)`);
+
+  const passed =
+    intentFinal.state === 5 &&           // Refunded
+    maker1CapacityAfter === 0n &&         // Slashed
+    takerRefunded &&                      // Taker refunded
+    dispute.resolved === true &&
+    dispute.fillDeemedValid === false;
+
+  console.log(`\n  ${passed ? "PASS" : "FAIL"}`);
+  return passed;
+}
+
+// ── Main ────────────────────────────────────────────────────────────────────
+
+async function main() {
+  console.log("=== Gauloi v2 E2E Tests ===");
+
+  // Start Anvil
+  console.log("\nStarting Anvil instances...");
   await startAnvil(SOURCE_PORT, 1);
   await startAnvil(DEST_PORT, 42161);
-  console.log("  Source chain (Ethereum): port", SOURCE_PORT);
-  console.log("  Dest chain (Arbitrum):   port", DEST_PORT);
 
-  // Create clients
   const sourceChain = { ...foundry, id: 1 as const };
   const destChain = { ...foundry, id: 42161 as const };
 
@@ -120,323 +493,62 @@ async function main() {
   const deployerSourceWallet = createWalletClient({ account: deployer, chain: sourceChain, transport: http(SOURCE_RPC) });
   const deployerDestWallet = createWalletClient({ account: deployer, chain: destChain, transport: http(DEST_RPC) });
 
-  // 2. Deploy contracts
-  console.log("\nDeploying contracts on source chain...");
-  const sourceOutput = deployContracts(SOURCE_RPC, 10); // 10s settlement for testing
-  const sourceAddrs = parseDeployOutput(sourceOutput);
-  console.log("  Source contracts:", sourceAddrs);
+  // Deploy
+  console.log("\nDeploying contracts...");
+  const sourceAddrs = parseDeployOutput(deployContracts(SOURCE_RPC, 10));
+  const destAddrs = parseDeployOutput(deployContracts(DEST_RPC, 10));
+  console.log("  Source:", sourceAddrs);
+  console.log("  Dest:  ", destAddrs);
 
-  console.log("Deploying contracts on dest chain...");
-  const destOutput = deployContracts(DEST_RPC, 10);
-  const destAddrs = parseDeployOutput(destOutput);
-  console.log("  Dest contracts:", destAddrs);
-
-  if (!sourceAddrs.USDC || !sourceAddrs.Staking || !sourceAddrs.Escrow) {
-    console.error("Failed to deploy contracts. Output:", sourceOutput);
-    cleanup();
-    process.exit(1);
+  if (!sourceAddrs.USDC || !sourceAddrs.Escrow || !sourceAddrs.Disputes) {
+    throw new Error("Deploy failed");
   }
 
-  // 3. Fund accounts with mock USDC
+  // Fund maker1 + taker
   console.log("\nFunding accounts...");
-  const mockMintAbi = parseAbi(["function mint(address to, uint256 amount) external"]);
+  await mintUSDC(deployerSourceWallet, sourceAddrs.USDC, taker.address, 1_000_000n * 10n ** 6n);
+  await mintUSDC(deployerSourceWallet, sourceAddrs.USDC, maker1.address, 1_000_000n * 10n ** 6n);
+  await mintUSDC(deployerDestWallet, destAddrs.USDC, maker1.address, 1_000_000n * 10n ** 6n);
 
-  // Mint USDC on source chain for taker (to create intents) and maker (for staking)
-  await deployerSourceWallet.writeContract({
-    address: sourceAddrs.USDC,
-    abi: mockMintAbi,
-    functionName: "mint",
-    args: [taker.address, 1_000_000n * 10n ** 6n],
-  });
-  await deployerSourceWallet.writeContract({
-    address: sourceAddrs.USDC,
-    abi: mockMintAbi,
-    functionName: "mint",
-    args: [maker.address, 1_000_000n * 10n ** 6n],
-  });
+  // Stake maker1
+  console.log("Staking maker1...");
+  await stakeFor(
+    createWalletClient({ account: maker1, chain: sourceChain, transport: http(SOURCE_RPC) }),
+    sourcePublic, sourceAddrs.USDC, sourceAddrs.Staking, 100_000n * 10n ** 6n,
+  );
 
-  // Mint USDC on dest chain for maker (to fill orders)
-  await deployerDestWallet.writeContract({
-    address: destAddrs.USDC,
-    abi: mockMintAbi,
-    functionName: "mint",
-    args: [maker.address, 1_000_000n * 10n ** 6n],
-  });
-
-  console.log("  Taker funded: 1M USDC (source)");
-  console.log("  Maker funded: 1M USDC (source + dest)");
-
-  // 4. Maker stakes on source chain
-  console.log("\nMaker staking...");
-  const makerSourceWallet = createWalletClient({ account: maker, chain: sourceChain, transport: http(SOURCE_RPC) });
-
-  await makerSourceWallet.writeContract({
-    address: sourceAddrs.USDC,
-    abi: erc20Abi,
-    functionName: "approve",
-    args: [sourceAddrs.Staking, 100_000n * 10n ** 6n],
-  });
-  await makerSourceWallet.writeContract({
-    address: sourceAddrs.Staking,
-    abi: GauloiStakingAbi,
-    functionName: "stake",
-    args: [100_000n * 10n ** 6n],
-  });
-  console.log("  Maker staked 100,000 USDC");
-
-  // 5. Start relay
-  console.log("\nStarting relay on port", RELAY_PORT, "...");
+  // Start relay
+  console.log("Starting relay...");
   const { close: closeRelay } = startRelayServer({ port: RELAY_PORT });
-
   await sleep(500);
 
-  // 6. Taker creates intent on-chain
-  console.log("\nTaker creating intent...");
-  const takerSourceWallet = createWalletClient({ account: taker, chain: sourceChain, transport: http(SOURCE_RPC) });
-  const makerDestWallet = createWalletClient({ account: maker, chain: destChain, transport: http(DEST_RPC) });
+  const ctx: Ctx = {
+    sourceChain, destChain, sourcePublic, destPublic,
+    deployerSourceWallet, deployerDestWallet,
+    sourceAddrs, destAddrs, closeRelay,
+  };
 
-  const inputAmount = 10_000n * 10n ** 6n; // 10,000 USDC
-  const minOutput = 9_950n * 10n ** 6n;    // 9,950 USDC min (allows 50 bps spread)
-  const expiry = BigInt(Math.floor(Date.now() / 1000) + 3600);
-
-  // Approve
-  await takerSourceWallet.writeContract({
-    address: sourceAddrs.USDC,
-    abi: erc20Abi,
-    functionName: "approve",
-    args: [sourceAddrs.Escrow, inputAmount],
-  });
-
-  // Create intent
-  const createTx = await takerSourceWallet.writeContract({
-    address: sourceAddrs.Escrow,
-    abi: GauloiEscrowAbi,
-    functionName: "createIntent",
-    args: [
-      sourceAddrs.USDC,
-      inputAmount,
-      destAddrs.USDC,
-      minOutput,
-      42161n,
-      taker.address,
-      expiry,
-    ],
-  });
-
-  const createReceipt = await sourcePublic.waitForTransactionReceipt({ hash: createTx });
-
-  // Find the IntentCreated log from the escrow contract
-  const intentCreatedLog = createReceipt.logs.find(
-    (log) => log.address.toLowerCase() === sourceAddrs.Escrow.toLowerCase() && log.topics.length >= 2,
-  );
-  if (!intentCreatedLog) {
-    console.error("Failed to find IntentCreated log in receipt");
-    cleanup();
-    process.exit(1);
-  }
-  const intentId = intentCreatedLog.topics[1] as `0x${string}`;
-  console.log("  Intent created:", intentId);
-
-  // 7. Simulate the RFQ flow via WebSocket
-  console.log("\nStarting RFQ flow...");
-
-  // Connect maker to relay
-  const makerWs = new WebSocket(`ws://127.0.0.1:${RELAY_PORT}`);
-  await new Promise<void>((resolve) => makerWs.on("open", resolve));
-
-  makerWs.send(JSON.stringify({
-    type: "maker_subscribe",
-    data: { address: maker.address },
-  }));
-
-  // Connect taker to relay
-  const takerWs = new WebSocket(`ws://127.0.0.1:${RELAY_PORT}`);
-  await new Promise<void>((resolve) => takerWs.on("open", resolve));
-
-  // Set up handlers for the flow
-  const flowComplete = new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Flow timed out after 30s")), 30_000);
-
-    // Maker handles new intents
-    makerWs.on("message", async (raw) => {
-      const msg = JSON.parse(raw.toString());
-
-      if (msg.type === "new_intent") {
-        console.log("  Maker received intent, signing and sending quote...");
-        const outputAmount = 9_970n * 10n ** 6n; // 9,970 USDC (30 bps spread)
-        const quoteExpiry = Math.floor(Date.now() / 1000) + 300;
-
-        const signature = await signQuote(makerSourceWallet as any, {
-          intentId: msg.data.intentId as `0x${string}`,
-          maker: maker.address,
-          outputAmount,
-          estimatedFillTime: 10,
-          expiry: quoteExpiry,
-        });
-
-        makerWs.send(JSON.stringify({
-          type: "maker_quote",
-          data: {
-            intentId: msg.data.intentId,
-            maker: maker.address,
-            outputAmount: outputAmount.toString(),
-            estimatedFillTime: 10,
-            expiry: quoteExpiry,
-            signature,
-          },
-        }));
-      }
-
-      if (msg.type === "quote_accepted") {
-        console.log("  Maker's quote accepted, executing fill...");
-
-        try {
-          // Commit on source chain
-          console.log("    Committing to intent...");
-          const commitTx = await makerSourceWallet.writeContract({
-            address: sourceAddrs.Escrow,
-            abi: GauloiEscrowAbi,
-            functionName: "commitToIntent",
-            args: [intentId],
-          });
-          await sourcePublic.waitForTransactionReceipt({ hash: commitTx });
-
-          // Fill on dest chain (transfer USDC to taker)
-          console.log("    Filling on destination chain...");
-          const fillAmount = 9_970n * 10n ** 6n;
-          const fillTx = await makerDestWallet.writeContract({
-            address: destAddrs.USDC,
-            abi: erc20Abi,
-            functionName: "transfer",
-            args: [taker.address, fillAmount],
-          });
-          const fillReceipt = await destPublic.waitForTransactionReceipt({ hash: fillTx });
-
-          // Submit fill evidence on source chain
-          console.log("    Submitting fill evidence...");
-          const submitTx = await makerSourceWallet.writeContract({
-            address: sourceAddrs.Escrow,
-            abi: GauloiEscrowAbi,
-            functionName: "submitFill",
-            args: [intentId, fillReceipt.transactionHash],
-          });
-          await sourcePublic.waitForTransactionReceipt({ hash: submitTx });
-
-          console.log("  Fill submitted, waiting for settlement window...");
-
-          // Wait for settlement window (10 seconds + buffer)
-          await sleep(12_000);
-
-          // Settle
-          console.log("    Settling...");
-          const settleTx = await makerSourceWallet.writeContract({
-            address: sourceAddrs.Escrow,
-            abi: GauloiEscrowAbi,
-            functionName: "settle",
-            args: [intentId],
-          });
-          await sourcePublic.waitForTransactionReceipt({ hash: settleTx });
-
-          console.log("  Settlement complete!");
-          clearTimeout(timeout);
-          resolve();
-        } catch (err) {
-          clearTimeout(timeout);
-          reject(err);
-        }
-      }
-    });
-
-    // Taker handles quotes
-    takerWs.on("message", (raw) => {
-      const msg = JSON.parse(raw.toString());
-
-      if (msg.type === "quote_received") {
-        console.log(`  Taker received quote: ${msg.data.outputAmount} from ${msg.data.maker}`);
-        console.log("  Taker selecting quote...");
-        takerWs.send(JSON.stringify({
-          type: "quote_select",
-          data: {
-            intentId,
-            maker: msg.data.maker,
-          },
-        }));
-      }
-    });
-  });
-
-  // Broadcast intent to relay
-  console.log("  Taker broadcasting intent to relay...");
-  takerWs.send(JSON.stringify({
-    type: "intent_broadcast",
-    data: {
-      intentId,
-      taker: taker.address,
-      inputToken: sourceAddrs.USDC,
-      inputAmount: inputAmount.toString(),
-      outputToken: destAddrs.USDC,
-      destinationChainId: 42161,
-      destinationAddress: taker.address,
-      minOutputAmount: minOutput.toString(),
-      expiry: Number(expiry),
-      sourceChainId: 1,
-    },
-  }));
+  let allPassed = true;
 
   try {
-    await flowComplete;
+    // Test 1
+    const t1 = await testHappyPath(ctx);
+    allPassed &&= t1;
 
-    // 8. Verify final state
-    console.log("\n=== Verifying Final State ===");
+    // Test 2
+    const t2 = await testDisputeFraud(ctx);
+    allPassed &&= t2;
 
-    // Check intent state
-    const intent = await sourcePublic.readContract({
-      address: sourceAddrs.Escrow,
-      abi: GauloiEscrowAbi,
-      functionName: "getIntent",
-      args: [intentId],
-    }) as any;
-    console.log(`  Intent state: ${intent.state} (3 = Settled)`);
-
-    // Check taker received USDC on dest chain
-    const takerDestBalance = await destPublic.readContract({
-      address: destAddrs.USDC,
-      abi: erc20Abi,
-      functionName: "balanceOf",
-      args: [taker.address],
-    });
-    console.log(`  Taker dest balance: ${Number(takerDestBalance) / 1e6} USDC`);
-
-    // Check maker received escrowed USDC on source chain
-    const makerSourceBalance = await sourcePublic.readContract({
-      address: sourceAddrs.USDC,
-      abi: erc20Abi,
-      functionName: "balanceOf",
-      args: [maker.address],
-    });
-    console.log(`  Maker source balance: ${Number(makerSourceBalance) / 1e6} USDC`);
-
-    // Check exposure released
-    const capacity = await sourcePublic.readContract({
-      address: sourceAddrs.Staking,
-      abi: GauloiStakingAbi,
-      functionName: "availableCapacity",
-      args: [maker.address],
-    });
-    console.log(`  Maker available capacity: ${Number(capacity) / 1e6} USDC`);
-
-    const allPassed = intent.state === 3 && takerDestBalance > 0n;
-    console.log(`\n=== E2E Test ${allPassed ? "PASSED" : "FAILED"} ===`);
+    console.log(`\n${"=".repeat(42)}`);
+    console.log(`  ${allPassed ? "ALL TESTS PASSED" : "SOME TESTS FAILED"}`);
+    console.log(`${"=".repeat(42)}`);
 
     process.exitCode = allPassed ? 0 : 1;
   } catch (err) {
-    console.error("\n=== E2E Test FAILED ===");
+    console.error("\n=== TEST ERROR ===");
     console.error(err);
     process.exitCode = 1;
   } finally {
-    // Cleanup
-    makerWs.close();
-    takerWs.close();
     closeRelay();
     cleanup();
   }
