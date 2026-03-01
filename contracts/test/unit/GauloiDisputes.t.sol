@@ -125,7 +125,7 @@ contract GauloiDisputesTest is BaseTest {
         assertTrue(escrow.getIntent(intentId).state == DataTypes.IntentState.Disputed);
     }
 
-    function test_dispute_bondCalculation() public {
+    function test_dispute_bondCalculation() public view {
         // For 100k fill: 0.5% = 500 USDC > 25 min
         assertEq(disputes.calculateDisputeBond(100_000e6), 500e6);
         // For 1k fill: 0.5% = 5 USDC < 25 min, so use min

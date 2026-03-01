@@ -229,7 +229,7 @@ contract GauloiStakingTest is BaseTest {
         assertEq(staking.availableCapacity(maker1), 30_000e6);
     }
 
-    function test_availableCapacity_inactive_returnsZero() public {
+    function test_availableCapacity_inactive_returnsZero() public view {
         assertEq(staking.availableCapacity(maker1), 0);
     }
 

@@ -219,7 +219,7 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         return bpsBond > minDisputeBond ? bpsBond : minDisputeBond;
     }
 
-    function requiredSignatures() public view returns (uint256) {
+    function requiredSignatures() public pure returns (uint256) {
         // For v0.1: at least 1 signature required (will scale with maker set)
         // TODO: implement proper M/N based on total active maker count
         return 1;
