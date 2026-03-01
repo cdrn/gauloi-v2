@@ -8,6 +8,9 @@ contracts/cache/
 contracts/cache_forge/
 contracts/broadcast/
 
+# Deployments (environment-specific)
+deployments/*.json
+
 # Node
 node_modules/
 dist/

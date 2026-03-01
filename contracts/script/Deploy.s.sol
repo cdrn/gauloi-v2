@@ -14,47 +14,60 @@ contract Deploy is Script {
 
         vm.startBroadcast(deployerKey);
 
-        // Deploy mock USDC
-        MockERC20 usdc = new MockERC20("USD Coin", "USDC", 6);
-        console.log("USDC:", address(usdc));
+        // USDC: use existing address if provided, otherwise deploy mock
+        address usdc = vm.envOr("USDC_ADDRESS", address(0));
+        if (usdc == address(0)) {
+            usdc = address(new MockERC20("USD Coin", "USDC", 6));
+            console.log("USDC (mock):", usdc);
+        } else {
+            console.log("USDC (existing):", usdc);
+        }
 
         // Deploy staking
         GauloiStaking staking = new GauloiStaking(
-            address(usdc),
-            10_000e6, // 10k min stake
-            48 hours,
+            usdc,
+            vm.envOr("MIN_STAKE", uint256(10_000e6)),
+            vm.envOr("COOLDOWN", uint256(48 hours)),
             deployer
         );
         console.log("Staking:", address(staking));
 
         // Deploy escrow
-        uint256 settlementWindow = vm.envOr("SETTLEMENT_WINDOW", uint256(15 minutes));
         GauloiEscrow escrow = new GauloiEscrow(
             address(staking),
-            settlementWindow,
-            5 minutes,
+            vm.envOr("SETTLEMENT_WINDOW", uint256(15 minutes)),
+            vm.envOr("COMMITMENT_TIMEOUT", uint256(5 minutes)),
             deployer
         );
         console.log("Escrow:", address(escrow));
 
         // Deploy disputes
-        GauloiDisputes disputes = new GauloiDisputes(
-            address(staking),
-            address(escrow),
-            address(usdc),
-            24 hours,
-            50,    // 50 bps = 0.5%
-            25e6,  // 25 USDC min bond
-            deployer
-        );
+        GauloiDisputes disputes = _deployDisputes(address(staking), address(escrow), usdc, deployer);
         console.log("Disputes:", address(disputes));
 
         // Wire up permissions
         staking.setEscrow(address(escrow));
         staking.setDisputes(address(disputes));
         escrow.setDisputes(address(disputes));
-        escrow.addSupportedToken(address(usdc));
+        escrow.addSupportedToken(usdc);
 
         vm.stopBroadcast();
+    }
+
+    function _deployDisputes(
+        address staking,
+        address escrow,
+        address usdc,
+        address owner
+    ) internal returns (GauloiDisputes) {
+        return new GauloiDisputes(
+            staking,
+            escrow,
+            usdc,
+            vm.envOr("RESOLUTION_WINDOW", uint256(24 hours)),
+            vm.envOr("BOND_BPS", uint256(50)),
+            vm.envOr("MIN_BOND", uint256(25e6)),
+            owner
+        );
     }
 }

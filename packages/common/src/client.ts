@@ -7,13 +7,15 @@ import {
   type Transport,
   type Chain,
 } from "viem";
-import { mainnet, arbitrum } from "viem/chains";
+import { mainnet, arbitrum, sepolia, arbitrumSepolia } from "viem/chains";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import type { ChainConfig } from "./types/chain.js";
 
 const viemChains: Record<number, Chain> = {
   1: mainnet,
   42161: arbitrum,
+  11155111: sepolia,
+  421614: arbitrumSepolia,
 };
 
 export function getPublicClient(config: ChainConfig): PublicClient<Transport, Chain> {

@@ -23,3 +23,7 @@ gas_reports = ["GauloiStaking", "GauloiEscrow", "GauloiDisputes"]
 
 [profile.fork]
 match_contract = "Fork"
+
+[rpc_endpoints]
+sepolia = "https://ethereum-sepolia-rpc.publicnode.com"
+arbitrum_sepolia = "https://arbitrum-sepolia-rpc.publicnode.com"
