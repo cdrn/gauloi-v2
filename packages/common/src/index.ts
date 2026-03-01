@@ -5,3 +5,4 @@ export * from "./types/quote.js";
 export * from "./constants/chains.js";
 export * from "./constants/tokens.js";
 export * from "./client.js";
+export * from "./eip712/quote.js";

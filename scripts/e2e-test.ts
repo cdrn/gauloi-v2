@@ -25,7 +25,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { foundry } from "viem/chains";
 import WebSocket from "ws";
 import { startRelayServer } from "../packages/relay/src/server.js";
-import { GauloiEscrowAbi, GauloiStakingAbi } from "@gauloi/common";
+import { GauloiEscrowAbi, GauloiStakingAbi, signQuote } from "@gauloi/common";
 
 // Test accounts (Anvil defaults)
 const DEPLOYER_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
@@ -262,8 +262,18 @@ async function main() {
       const msg = JSON.parse(raw.toString());
 
       if (msg.type === "new_intent") {
-        console.log("  Maker received intent, sending quote...");
+        console.log("  Maker received intent, signing and sending quote...");
         const outputAmount = 9_970n * 10n ** 6n; // 9,970 USDC (30 bps spread)
+        const quoteExpiry = Math.floor(Date.now() / 1000) + 300;
+
+        const signature = await signQuote(makerSourceWallet as any, {
+          intentId: msg.data.intentId as `0x${string}`,
+          maker: maker.address,
+          outputAmount,
+          estimatedFillTime: 10,
+          expiry: quoteExpiry,
+        });
+
         makerWs.send(JSON.stringify({
           type: "maker_quote",
           data: {
@@ -271,8 +281,8 @@ async function main() {
             maker: maker.address,
             outputAmount: outputAmount.toString(),
             estimatedFillTime: 10,
-            expiry: Math.floor(Date.now() / 1000) + 300,
-            signature: "0x",
+            expiry: quoteExpiry,
+            signature,
           },
         }));
       }

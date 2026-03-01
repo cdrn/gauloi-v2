@@ -1,4 +1,5 @@
 import { WebSocketServer, WebSocket } from "ws";
+import { verifyQuoteSignature } from "@gauloi/common";
 import { MemoryStore } from "./store/memory.js";
 import {
   MessageType,
@@ -102,10 +103,27 @@ export class Relay {
     }
   }
 
-  private handleMakerQuote(
+  private async handleMakerQuote(
     client: ConnectedClient,
     msg: MakerQuoteMessage,
-  ): void {
+  ): Promise<void> {
+    // Verify EIP-712 signature
+    const valid = await verifyQuoteSignature(
+      {
+        intentId: msg.data.intentId as `0x${string}`,
+        maker: msg.data.maker as `0x${string}`,
+        outputAmount: BigInt(msg.data.outputAmount),
+        estimatedFillTime: msg.data.estimatedFillTime,
+        expiry: msg.data.expiry,
+      },
+      msg.data.signature as `0x${string}`,
+    );
+
+    if (!valid) {
+      this.sendError(client.ws, "Invalid quote signature");
+      return;
+    }
+
     const added = this.store.addQuote(msg.data.intentId, msg.data);
     if (!added) {
       this.sendError(client.ws, "Cannot add quote: intent not found or already selected");

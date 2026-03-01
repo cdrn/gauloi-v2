@@ -9,6 +9,7 @@ import { type PrivateKeyAccount } from "viem/accounts";
 import {
   type ChainConfig,
   GauloiStakingAbi,
+  signQuote,
 } from "@gauloi/common";
 import { ComplianceScreener, AllowlistScreener } from "./compliance/screener.js";
 import { Quoter, type QuoterConfig } from "./pricing/quoter.js";
@@ -212,6 +213,17 @@ export class MakerBot {
     }
 
     // Submit quote to relay
+    const quoteExpiry = Math.floor(Date.now() / 1000) + 300; // 5 min
+    const quoteMsg = {
+      intentId: intentId as `0x${string}`,
+      maker: this.config.makerAddress,
+      outputAmount,
+      estimatedFillTime: 30,
+      expiry: quoteExpiry,
+    };
+
+    const signature = await signQuote(this.config.sourceWalletClient, quoteMsg);
+
     console.log(
       `Quoting intent ${intentId}: ${outputAmount} (${screenResult.riskTier})`,
     );
@@ -223,9 +235,9 @@ export class MakerBot {
           intentId,
           maker: this.config.makerAddress,
           outputAmount: outputAmount.toString(),
-          estimatedFillTime: 30, // seconds
-          expiry: Math.floor(Date.now() / 1000) + 300, // 5 min
-          signature: "0x", // TODO: sign quote
+          estimatedFillTime: 30,
+          expiry: quoteExpiry,
+          signature,
         },
       }),
     );
