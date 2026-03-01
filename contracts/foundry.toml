@@ -20,3 +20,6 @@ fuzz = { runs = 1000 }
 
 [profile.gas]
 gas_reports = ["GauloiStaking", "GauloiEscrow", "GauloiDisputes"]
+
+[profile.fork]
+match_contract = "Fork"
