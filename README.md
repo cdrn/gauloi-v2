@@ -47,6 +47,8 @@ The taker pays zero gas — they sign an [EIP-712](https://eips.ethereum.org/EIP
 
 **Attestors are the makers themselves.** Resolution uses M/N signatures from the staked maker set. No separate attestor class, no governance token. Makers already have the infrastructure (watching multiple chains), economic alignment (their own fills depend on system integrity), and capital at risk (incorrect attestation = slashing). Stablecoin fill verification is objectively binary — the transaction either exists with the right parameters or it doesn't.
 
+**Pricing is competitive, not algorithmic.** Makers quote spreads via off-chain RFQ, not an AMM curve. Multiple makers see each order and compete on price — the taker picks the best quote. Spreads reflect real costs: gas on the destination chain, capital lockup during the settlement window, finality risk for the specific chain pair, and the maker's own compliance overhead. Stablecoin pairs have tight natural bounds (both sides are ~$1), so there's no impermanent loss and spreads stay in the low single-digit basis points. Makers who misprice get outcompeted; makers who price accurately earn volume.
+
 **Compliance at the maker level.** Makers screen counterparties and price risk into their spread. The protocol doesn't enforce KYC — it provides the settlement infrastructure, and makers operate within their own regulatory framework.
 
 ### Off-chain RFQ flow
