@@ -32,6 +32,8 @@ export interface IntentBroadcastMessage {
     destinationAddress: string;
     minOutputAmount: string;
     expiry: number;
+    nonce: string; // bigint as string
+    takerSignature: string;
     sourceChainId: number;
   };
 }
@@ -58,7 +60,7 @@ export interface QuoteSelectMessage {
 
 export interface NewIntentMessage {
   type: MessageType.NewIntent;
-  data: IntentBroadcastMessage["data"];
+  data: Omit<IntentBroadcastMessage["data"], "takerSignature" | "nonce">;
 }
 
 export interface QuoteReceivedMessage {
@@ -77,6 +79,9 @@ export interface QuoteAcceptedMessage {
     destinationChainId: number;
     destinationAddress: string;
     minOutputAmount: string;
+    expiry: number;
+    nonce: string;
+    takerSignature: string;
     sourceChainId: number;
   };
 }

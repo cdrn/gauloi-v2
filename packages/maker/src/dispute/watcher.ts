@@ -5,7 +5,7 @@ import {
   type Chain,
 } from "viem";
 import { type PrivateKeyAccount } from "viem/accounts";
-import { GauloiDisputesAbi } from "@gauloi/common";
+import { GauloiDisputesAbi, type Order } from "@gauloi/common";
 import type { FillSubmittedEvent } from "../chain/watcher.js";
 
 /**
@@ -48,8 +48,14 @@ export class DisputeWatcher {
 
   /**
    * Raise a dispute for an invalid fill.
+   * Requires the original Order data since dispute() now takes Order calldata.
    */
-  async dispute(intentId: `0x${string}`): Promise<void> {
+  async dispute(intentId: `0x${string}`, order?: Order): Promise<void> {
+    if (!order) {
+      console.error(`Cannot dispute intent ${intentId}: order data not available`);
+      return;
+    }
+
     console.log(`Disputing fill for intent ${intentId}...`);
 
     try {
@@ -57,7 +63,7 @@ export class DisputeWatcher {
         address: this.disputesAddress,
         abi: GauloiDisputesAbi,
         functionName: "dispute",
-        args: [intentId],
+        args: [order],
       });
 
       console.log(`Dispute submitted: ${hash}`);

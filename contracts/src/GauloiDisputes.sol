@@ -10,6 +10,7 @@ import {IGauloiStaking} from "./interfaces/IGauloiStaking.sol";
 import {GauloiEscrow} from "./GauloiEscrow.sol";
 import {DataTypes} from "./types/DataTypes.sol";
 import {SignatureLib} from "./libraries/SignatureLib.sol";
+import {IntentLib} from "./libraries/IntentLib.sol";
 
 contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -25,6 +26,7 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
     bytes32 public immutable domainSeparator;
 
     mapping(bytes32 => DataTypes.Dispute) internal _disputes;
+    mapping(bytes32 => DataTypes.Order) internal _disputeOrders;
 
     constructor(
         address _staking,
@@ -43,7 +45,7 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         disputeResolutionDuration = _resolutionWindow;
         disputeBondBps = _bondBps;
         minDisputeBond = _minBond;
-        domainSeparator = SignatureLib.buildDomainSeparator(address(this));
+        domainSeparator = SignatureLib.buildDomainSeparator("GauloiDisputes", address(this));
     }
 
     // --- Admin ---
@@ -65,16 +67,18 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
 
     // --- Dispute lifecycle ---
 
-    function dispute(bytes32 intentId) external nonReentrant {
+    function dispute(DataTypes.Order calldata order) external nonReentrant {
         require(staking.isActiveMaker(msg.sender), "GauloiDisputes: not active maker");
+
+        bytes32 intentId = IntentLib.computeIntentId(order);
         require(_disputes[intentId].challenger == address(0), "GauloiDisputes: already disputed");
 
-        DataTypes.Intent memory intent = escrow.getIntent(intentId);
-        require(intent.state == DataTypes.IntentState.Filled, "GauloiDisputes: not filled");
-        require(block.timestamp < intent.disputeWindowEnd, "GauloiDisputes: window closed");
-        require(msg.sender != intent.maker, "GauloiDisputes: cannot dispute own fill");
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+        require(commitment.state == DataTypes.IntentState.Filled, "GauloiDisputes: not filled");
+        require(block.timestamp < commitment.disputeWindowEnd, "GauloiDisputes: window closed");
+        require(msg.sender != commitment.maker, "GauloiDisputes: cannot dispute own fill");
 
-        uint256 bondAmount = calculateDisputeBond(intent.inputAmount);
+        uint256 bondAmount = calculateDisputeBond(order.inputAmount);
 
         // Transfer bond from challenger
         bondToken.safeTransferFrom(msg.sender, address(this), bondAmount);
@@ -87,6 +91,9 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
             resolved: false,
             fillDeemedValid: false
         });
+
+        // Store order for later resolution
+        _disputeOrders[intentId] = order;
 
         // Transition intent to Disputed in escrow
         escrow.setDisputed(intentId);
@@ -104,7 +111,8 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         require(!disp.resolved, "GauloiDisputes: already resolved");
         require(block.timestamp <= disp.disputeDeadline, "GauloiDisputes: deadline passed");
 
-        DataTypes.Intent memory intent = escrow.getIntent(intentId);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+        DataTypes.Order storage order = _disputeOrders[intentId];
 
         // Verify threshold of unique staked maker signatures
         uint256 required = requiredSignatures();
@@ -119,15 +127,15 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
                 domainSeparator,
                 intentId,
                 fillValid,
-                intent.fillTxHash,
-                intent.destinationChainId,
+                commitment.fillTxHash,
+                order.destinationChainId,
                 signatures[i]
             );
 
             // Must be an active staked maker
             require(staking.isActiveMaker(signer), "GauloiDisputes: signer not active maker");
             // Must not be the disputed maker or the challenger (conflict of interest)
-            require(signer != intent.maker, "GauloiDisputes: maker cannot attest own fill");
+            require(signer != commitment.maker, "GauloiDisputes: maker cannot attest own fill");
             require(signer != disp.challenger, "GauloiDisputes: challenger cannot attest");
 
             // Check uniqueness
@@ -145,9 +153,9 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         disp.fillDeemedValid = fillValid;
 
         if (fillValid) {
-            _resolveAsValid(intentId, intent, disp);
+            _resolveAsValid(intentId, commitment, disp);
         } else {
-            _resolveAsInvalid(intentId, intent, disp);
+            _resolveAsInvalid(intentId, commitment, disp);
         }
 
         emit DisputeResolved(intentId, fillValid);
@@ -159,13 +167,13 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         require(!disp.resolved, "GauloiDisputes: already resolved");
         require(block.timestamp > disp.disputeDeadline, "GauloiDisputes: deadline not passed");
 
-        DataTypes.Intent memory intent = escrow.getIntent(intentId);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
 
         // Default to fill-valid (prevents griefing by raising dispute and never resolving)
         disp.resolved = true;
         disp.fillDeemedValid = true;
 
-        _resolveAsValid(intentId, intent, disp);
+        _resolveAsValid(intentId, commitment, disp);
 
         emit DisputeResolved(intentId, true);
     }
@@ -174,30 +182,34 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
 
     function _resolveAsValid(
         bytes32 intentId,
-        DataTypes.Intent memory intent,
+        DataTypes.Commitment memory commitment,
         DataTypes.Dispute storage disp
     ) internal {
+        DataTypes.Order storage order = _disputeOrders[intentId];
+
         // Fill was valid — disputer was wrong
         // Slash disputer's bond: portion to maker as compensation, rest to protocol
         uint256 makerReward = disp.bondAmount / 2;
 
-        bondToken.safeTransfer(intent.maker, makerReward);
+        bondToken.safeTransfer(commitment.maker, makerReward);
         // Remaining bond stays in this contract as protocol treasury
 
         // Release escrow to maker
-        escrow.resolveValid(intentId);
+        escrow.resolveValid(intentId, order);
 
         emit ChallengerBondSlashed(disp.challenger, disp.bondAmount);
     }
 
     function _resolveAsInvalid(
         bytes32 intentId,
-        DataTypes.Intent memory intent,
+        DataTypes.Commitment memory commitment,
         DataTypes.Dispute storage disp
     ) internal {
+        DataTypes.Order storage order = _disputeOrders[intentId];
+
         // Fill was invalid — maker committed fraud
         // Slash maker's entire stake
-        uint256 slashedAmount = staking.slash(intent.maker, intentId);
+        uint256 slashedAmount = staking.slash(commitment.maker, intentId);
 
         // Reward challenger: return bond + portion of slashed stake
         uint256 challengerReward = disp.bondAmount + (slashedAmount / 4);
@@ -208,7 +220,7 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
 
         // Refund taker's escrowed funds
         // Exposure is already zeroed by staking.slash()
-        escrow.resolveInvalid(intentId);
+        escrow.resolveInvalid(intentId, order);
 
         emit ChallengerRewarded(disp.challenger, challengerReward);
     }
@@ -226,7 +238,6 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
 
     function requiredSignatures() public pure returns (uint256) {
         // For v0.1: at least 1 signature required (will scale with maker set)
-        // TODO: implement proper M/N based on total active maker count
         return 1;
     }
 

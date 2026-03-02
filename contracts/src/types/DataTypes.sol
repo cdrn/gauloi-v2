@@ -3,29 +3,37 @@ pragma solidity ^0.8.24;
 
 library DataTypes {
     enum IntentState {
-        Open,       // Taker deposited, waiting for maker
-        Committed,  // Maker reserved, filling in progress
+        Committed,  // Maker executed order, filling in progress
         Filled,     // Maker submitted fill evidence, dispute window active
         Settled,    // Escrow released to maker (terminal)
         Disputed,   // Active dispute in progress
-        Expired     // No maker committed or commitment timed out, taker can reclaim (terminal)
+        Expired     // Commitment timed out, taker can reclaim (terminal)
     }
 
-    struct Intent {
-        bytes32 intentId;
+    /// @notice Signed order from the taker (never stored on-chain)
+    struct Order {
         address taker;
         address inputToken;
         uint256 inputAmount;
-        uint256 destinationChainId;
-        address destinationAddress;
         address outputToken;
         uint256 minOutputAmount;
+        uint256 destinationChainId;
+        address destinationAddress;
         uint256 expiry;
+        uint256 nonce;
+    }
+
+    /// @notice On-chain commitment — only mutable state (3 storage slots)
+    struct Commitment {
+        // slot 1: taker (20B) + state (1B)
+        address taker;
         IntentState state;
+        // slot 2: maker (20B) + commitmentDeadline (5B) + disputeWindowEnd (5B)
         address maker;
-        uint256 commitmentDeadline;
+        uint40 commitmentDeadline;
+        uint40 disputeWindowEnd;
+        // slot 3: fillTxHash (32B)
         bytes32 fillTxHash;
-        uint256 disputeWindowEnd;
     }
 
     struct MakerInfo {

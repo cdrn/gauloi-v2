@@ -3,6 +3,8 @@ pragma solidity ^0.8.24;
 
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {DataTypes} from "../types/DataTypes.sol";
+import {IntentLib} from "./IntentLib.sol";
 
 library SignatureLib {
     bytes32 internal constant FILL_ATTESTATION_TYPEHASH = keccak256(
@@ -13,10 +15,10 @@ library SignatureLib {
         "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
     );
 
-    function buildDomainSeparator(address verifyingContract) internal view returns (bytes32) {
+    function buildDomainSeparator(string memory name, address verifyingContract) internal view returns (bytes32) {
         return keccak256(abi.encode(
             EIP712_DOMAIN_TYPEHASH,
-            keccak256("GauloiDisputes"),
+            keccak256(bytes(name)),
             keccak256("1"),
             block.chainid,
             verifyingContract
@@ -47,6 +49,16 @@ library SignatureLib {
         bytes memory signature
     ) internal pure returns (address) {
         bytes32 structHash = hashAttestation(intentId, fillValid, fillTxHash, destinationChainId);
+        bytes32 digest = MessageHashUtils.toTypedDataHash(domainSeparator, structHash);
+        return ECDSA.recover(digest, signature);
+    }
+
+    function recoverOrderSigner(
+        bytes32 domainSeparator,
+        DataTypes.Order memory order,
+        bytes memory signature
+    ) internal pure returns (address) {
+        bytes32 structHash = IntentLib.hashOrder(order);
         bytes32 digest = MessageHashUtils.toTypedDataHash(domainSeparator, structHash);
         return ECDSA.recover(digest, signature);
     }

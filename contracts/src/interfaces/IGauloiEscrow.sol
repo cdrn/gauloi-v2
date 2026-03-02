@@ -5,16 +5,16 @@ import {DataTypes} from "../types/DataTypes.sol";
 
 interface IGauloiEscrow {
     // Events
-    event IntentCreated(
+    event OrderExecuted(
         bytes32 indexed intentId,
         address indexed taker,
+        address indexed maker,
         address inputToken,
         uint256 inputAmount,
         uint256 destinationChainId,
         address outputToken,
         uint256 minOutputAmount
     );
-    event IntentCommitted(bytes32 indexed intentId, address indexed maker);
     event FillSubmitted(
         bytes32 indexed intentId,
         address indexed maker,
@@ -24,34 +24,26 @@ interface IGauloiEscrow {
     event IntentSettled(bytes32 indexed intentId, address indexed maker, uint256 amount);
     event IntentReclaimed(bytes32 indexed intentId, address indexed taker);
 
-    // Taker deposits and creates intent
-    function createIntent(
-        address inputToken,
-        uint256 inputAmount,
-        address outputToken,
-        uint256 minOutputAmount,
-        uint256 destinationChainId,
-        address destinationAddress,
-        uint256 expiry
+    // Maker executes a taker's signed order (pulls tokens from taker, commits)
+    function executeOrder(
+        DataTypes.Order calldata order,
+        bytes calldata takerSignature
     ) external returns (bytes32 intentId);
-
-    // Staked maker commits to fill an intent
-    function commitToIntent(bytes32 intentId) external;
 
     // Maker submits fill evidence (destination tx hash)
     function submitFill(bytes32 intentId, bytes32 destinationTxHash) external;
 
     // Settle a single intent after dispute window
-    function settle(bytes32 intentId) external;
+    function settle(DataTypes.Order calldata order) external;
 
     // Batch settle multiple matured intents
-    function settleBatch(bytes32[] calldata intentIds) external;
+    function settleBatch(DataTypes.Order[] calldata orders) external;
 
-    // Taker reclaims after expiry or commitment timeout
-    function reclaimExpired(bytes32 intentId) external;
+    // Taker reclaims after commitment timeout
+    function reclaimExpired(DataTypes.Order calldata order) external;
 
     // --- View functions ---
-    function getIntent(bytes32 intentId) external view returns (DataTypes.Intent memory);
+    function getCommitment(bytes32 intentId) external view returns (DataTypes.Commitment memory);
     function settlementWindow() external view returns (uint256);
     function commitmentTimeout() external view returns (uint256);
 }

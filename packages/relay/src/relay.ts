@@ -90,10 +90,11 @@ export class Relay {
 
     this.store.addIntent(msg.data);
 
-    // Broadcast to all connected makers
+    // Broadcast to all connected makers (strip signature — only sent to selected maker)
+    const { takerSignature: _sig, nonce: _nonce, ...intentData } = msg.data;
     const outMsg = JSON.stringify({
       type: MessageType.NewIntent,
-      data: msg.data,
+      data: intentData,
     });
 
     for (const c of this.clients) {
@@ -163,7 +164,7 @@ export class Relay {
     const stored = this.store.getIntent(msg.data.intentId);
     if (!stored) return;
 
-    // Notify the winning maker
+    // Notify the winning maker with order data + taker signature
     const outMsg = JSON.stringify({
       type: MessageType.QuoteAccepted,
       data: {
@@ -175,6 +176,9 @@ export class Relay {
         destinationChainId: stored.intent.destinationChainId,
         destinationAddress: stored.intent.destinationAddress,
         minOutputAmount: stored.intent.minOutputAmount,
+        expiry: stored.intent.expiry,
+        nonce: stored.intent.nonce,
+        takerSignature: stored.intent.takerSignature,
         sourceChainId: stored.intent.sourceChainId,
       },
     });

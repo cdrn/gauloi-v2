@@ -1,25 +1,28 @@
 export enum IntentState {
-  Open = 0,
-  Committed = 1,
-  Filled = 2,
-  Settled = 3,
-  Disputed = 4,
-  Expired = 5,
+  Committed = 0,
+  Filled = 1,
+  Settled = 2,
+  Disputed = 3,
+  Expired = 4,
 }
 
-export interface Intent {
-  intentId: `0x${string}`;
+export interface Order {
   taker: `0x${string}`;
   inputToken: `0x${string}`;
   inputAmount: bigint;
-  destinationChainId: bigint;
-  destinationAddress: `0x${string}`;
   outputToken: `0x${string}`;
   minOutputAmount: bigint;
+  destinationChainId: bigint;
+  destinationAddress: `0x${string}`;
   expiry: bigint;
+  nonce: bigint;
+}
+
+export interface Commitment {
+  taker: `0x${string}`;
   state: IntentState;
   maker: `0x${string}`;
-  commitmentDeadline: bigint;
+  commitmentDeadline: number;
+  disputeWindowEnd: number;
   fillTxHash: `0x${string}`;
-  disputeWindowEnd: bigint;
 }

@@ -40,19 +40,6 @@ export const GauloiEscrowAbi = [
   },
   {
     "type": "function",
-    "name": "commitToIntent",
-    "inputs": [
-      {
-        "name": "intentId",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "commitmentTimeout",
     "inputs": [],
     "outputs": [
@@ -79,55 +66,6 @@ export const GauloiEscrowAbi = [
   },
   {
     "type": "function",
-    "name": "createIntent",
-    "inputs": [
-      {
-        "name": "inputToken",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "inputAmount",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "outputToken",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "minOutputAmount",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "destinationChainId",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "destinationAddress",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "expiry",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "intentId",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "disputes",
     "inputs": [],
     "outputs": [
@@ -141,25 +79,26 @@ export const GauloiEscrowAbi = [
   },
   {
     "type": "function",
-    "name": "getIntent",
-    "inputs": [
+    "name": "domainSeparator",
+    "inputs": [],
+    "outputs": [
       {
-        "name": "intentId",
+        "name": "",
         "type": "bytes32",
         "internalType": "bytes32"
       }
     ],
-    "outputs": [
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "executeOrder",
+    "inputs": [
       {
-        "name": "",
+        "name": "order",
         "type": "tuple",
-        "internalType": "struct DataTypes.Intent",
+        "internalType": "struct DataTypes.Order",
         "components": [
-          {
-            "name": "intentId",
-            "type": "bytes32",
-            "internalType": "bytes32"
-          },
           {
             "name": "taker",
             "type": "address",
@@ -176,16 +115,6 @@ export const GauloiEscrowAbi = [
             "internalType": "uint256"
           },
           {
-            "name": "destinationChainId",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "destinationAddress",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
             "name": "outputToken",
             "type": "address",
             "internalType": "address"
@@ -196,9 +125,62 @@ export const GauloiEscrowAbi = [
             "internalType": "uint256"
           },
           {
+            "name": "destinationChainId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationAddress",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
             "name": "expiry",
             "type": "uint256",
             "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "takerSignature",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "intentId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getCommitment",
+    "inputs": [
+      {
+        "name": "intentId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct DataTypes.Commitment",
+        "components": [
+          {
+            "name": "taker",
+            "type": "address",
+            "internalType": "address"
           },
           {
             "name": "state",
@@ -212,39 +194,20 @@ export const GauloiEscrowAbi = [
           },
           {
             "name": "commitmentDeadline",
-            "type": "uint256",
-            "internalType": "uint256"
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "disputeWindowEnd",
+            "type": "uint40",
+            "internalType": "uint40"
           },
           {
             "name": "fillTxHash",
             "type": "bytes32",
             "internalType": "bytes32"
-          },
-          {
-            "name": "disputeWindowEnd",
-            "type": "uint256",
-            "internalType": "uint256"
           }
         ]
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "nonces",
-    "inputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -267,9 +230,56 @@ export const GauloiEscrowAbi = [
     "name": "reclaimExpired",
     "inputs": [
       {
-        "name": "intentId",
-        "type": "bytes32",
-        "internalType": "bytes32"
+        "name": "order",
+        "type": "tuple",
+        "internalType": "struct DataTypes.Order",
+        "components": [
+          {
+            "name": "taker",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "outputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "minOutputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationChainId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationAddress",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "expiry",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
       }
     ],
     "outputs": [],
@@ -303,6 +313,58 @@ export const GauloiEscrowAbi = [
         "name": "intentId",
         "type": "bytes32",
         "internalType": "bytes32"
+      },
+      {
+        "name": "order",
+        "type": "tuple",
+        "internalType": "struct DataTypes.Order",
+        "components": [
+          {
+            "name": "taker",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "outputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "minOutputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationChainId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationAddress",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "expiry",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
       }
     ],
     "outputs": [],
@@ -316,6 +378,58 @@ export const GauloiEscrowAbi = [
         "name": "intentId",
         "type": "bytes32",
         "internalType": "bytes32"
+      },
+      {
+        "name": "order",
+        "type": "tuple",
+        "internalType": "struct DataTypes.Order",
+        "components": [
+          {
+            "name": "taker",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "outputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "minOutputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationChainId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationAddress",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "expiry",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
       }
     ],
     "outputs": [],
@@ -378,9 +492,56 @@ export const GauloiEscrowAbi = [
     "name": "settle",
     "inputs": [
       {
-        "name": "intentId",
-        "type": "bytes32",
-        "internalType": "bytes32"
+        "name": "order",
+        "type": "tuple",
+        "internalType": "struct DataTypes.Order",
+        "components": [
+          {
+            "name": "taker",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "outputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "minOutputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationChainId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationAddress",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "expiry",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
       }
     ],
     "outputs": [],
@@ -391,9 +552,56 @@ export const GauloiEscrowAbi = [
     "name": "settleBatch",
     "inputs": [
       {
-        "name": "intentIds",
-        "type": "bytes32[]",
-        "internalType": "bytes32[]"
+        "name": "orders",
+        "type": "tuple[]",
+        "internalType": "struct DataTypes.Order[]",
+        "components": [
+          {
+            "name": "taker",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "outputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "minOutputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationChainId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationAddress",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "expiry",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
       }
     ],
     "outputs": [],
@@ -404,9 +612,56 @@ export const GauloiEscrowAbi = [
     "name": "settleInternal",
     "inputs": [
       {
-        "name": "intentId",
-        "type": "bytes32",
-        "internalType": "bytes32"
+        "name": "order",
+        "type": "tuple",
+        "internalType": "struct DataTypes.Order",
+        "components": [
+          {
+            "name": "taker",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "outputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "minOutputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationChainId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationAddress",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "expiry",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
       }
     ],
     "outputs": [],
@@ -534,74 +789,6 @@ export const GauloiEscrowAbi = [
   },
   {
     "type": "event",
-    "name": "IntentCommitted",
-    "inputs": [
-      {
-        "name": "intentId",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "maker",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "IntentCreated",
-    "inputs": [
-      {
-        "name": "intentId",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "taker",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "inputToken",
-        "type": "address",
-        "indexed": false,
-        "internalType": "address"
-      },
-      {
-        "name": "inputAmount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "destinationChainId",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "outputToken",
-        "type": "address",
-        "indexed": false,
-        "internalType": "address"
-      },
-      {
-        "name": "minOutputAmount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
     "name": "IntentReclaimed",
     "inputs": [
       {
@@ -646,6 +833,61 @@ export const GauloiEscrowAbi = [
   },
   {
     "type": "event",
+    "name": "OrderExecuted",
+    "inputs": [
+      {
+        "name": "intentId",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "taker",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "maker",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "inputToken",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "inputAmount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "destinationChainId",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "outputToken",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "minOutputAmount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "OwnershipTransferred",
     "inputs": [
       {
@@ -662,6 +904,33 @@ export const GauloiEscrowAbi = [
       }
     ],
     "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "ECDSAInvalidSignature",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ECDSAInvalidSignatureLength",
+    "inputs": [
+      {
+        "name": "length",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ECDSAInvalidSignatureS",
+    "inputs": [
+      {
+        "name": "s",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ]
   },
   {
     "type": "error",

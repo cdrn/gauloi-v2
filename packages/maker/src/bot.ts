@@ -8,6 +8,7 @@ import {
 import { type PrivateKeyAccount } from "viem/accounts";
 import {
   type ChainConfig,
+  type Order,
   GauloiStakingAbi,
   signQuote,
 } from "@gauloi/common";
@@ -246,18 +247,36 @@ export class MakerBot {
   private async handleQuoteAccepted(data: any): Promise<void> {
     const {
       intentId,
+      taker,
+      inputToken,
       inputAmount,
       outputToken,
-      destinationAddress,
       minOutputAmount,
+      destinationChainId,
+      destinationAddress,
+      nonce,
+      takerSignature,
     } = data;
 
-    console.log(`Quote accepted for intent ${intentId}, executing fill...`);
+    console.log(`Quote accepted for intent ${intentId}, executing order...`);
 
     try {
-      // 1. Commit on source chain
-      console.log("Committing to intent...");
-      await this.filler.commitToIntent(intentId as `0x${string}`);
+      // Build the Order struct for executeOrder
+      const order: Order = {
+        taker: taker as `0x${string}`,
+        inputToken: inputToken as `0x${string}`,
+        inputAmount: BigInt(inputAmount),
+        outputToken: outputToken as `0x${string}`,
+        minOutputAmount: BigInt(minOutputAmount),
+        destinationChainId: BigInt(destinationChainId),
+        destinationAddress: destinationAddress as `0x${string}`,
+        expiry: BigInt(data.expiry),
+        nonce: BigInt(nonce),
+      };
+
+      // 1. Execute order on source chain (replaces commitToIntent)
+      console.log("Executing order on source chain...");
+      await this.filler.executeOrder(order, takerSignature as `0x${string}`);
 
       // 2. Fill on destination chain
       console.log("Filling on destination chain...");
@@ -278,7 +297,7 @@ export class MakerBot {
       const disputeWindowEnd =
         Math.floor(Date.now() / 1000) +
         this.config.sourceChain.settlementWindow;
-      this.settler.trackFill(intentId as `0x${string}`, disputeWindowEnd);
+      this.settler.trackFill(intentId as `0x${string}`, disputeWindowEnd, order);
 
       console.log(`Fill complete for intent ${intentId}: ${fillTxHash}`);
     } catch (err) {

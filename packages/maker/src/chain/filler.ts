@@ -7,11 +7,11 @@ import {
   getContract,
 } from "viem";
 import { type PrivateKeyAccount } from "viem/accounts";
-import { GauloiEscrowAbi } from "@gauloi/common";
+import { GauloiEscrowAbi, type Order } from "@gauloi/common";
 
 /**
  * Handles on-chain operations for the maker:
- * - commitToIntent on source chain
+ * - executeOrder on source chain (pulls tokens from taker, commits)
  * - transfer tokens on destination chain (the actual fill)
  * - submitFill on source chain
  */
@@ -24,12 +24,12 @@ export class Filler {
     private escrowAddress: `0x${string}`,
   ) {}
 
-  async commitToIntent(intentId: `0x${string}`): Promise<Hash> {
+  async executeOrder(order: Order, takerSignature: `0x${string}`): Promise<Hash> {
     const hash = await this.sourceWallet.writeContract({
       address: this.escrowAddress,
       abi: GauloiEscrowAbi,
-      functionName: "commitToIntent",
-      args: [intentId],
+      functionName: "executeOrder",
+      args: [order, takerSignature],
     });
 
     await this.sourcePublic.waitForTransactionReceipt({ hash });

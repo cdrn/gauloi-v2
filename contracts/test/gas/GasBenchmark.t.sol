@@ -7,6 +7,7 @@ import {GauloiStaking} from "../../src/GauloiStaking.sol";
 import {GauloiEscrow} from "../../src/GauloiEscrow.sol";
 import {GauloiDisputes} from "../../src/GauloiDisputes.sol";
 import {DataTypes} from "../../src/types/DataTypes.sol";
+import {IntentLib} from "../../src/libraries/IntentLib.sol";
 import {SignatureLib} from "../../src/libraries/SignatureLib.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
@@ -20,7 +21,10 @@ contract GasBenchmark is Test {
     GauloiDisputes disputes;
 
     address owner = makeAddr("owner");
-    address taker = makeAddr("taker");
+
+    // Taker with private key
+    uint256 takerKey = 0x7A4E5;
+    address taker;
 
     // Makers with known private keys (for dispute signatures)
     uint256 maker1Key = 0xA11CE;
@@ -40,7 +44,10 @@ contract GasBenchmark is Test {
     uint256 constant DEST_CHAIN_ID = 42161;
     address constant DEST_ADDRESS = address(0xBEEF);
 
+    uint256 internal _testNonce;
+
     function setUp() public {
+        taker = vm.addr(takerKey);
         maker1 = vm.addr(maker1Key);
         maker2 = vm.addr(maker2Key);
         maker3 = vm.addr(maker3Key);
@@ -65,6 +72,10 @@ contract GasBenchmark is Test {
         usdc.mint(maker2, 10_000_000e6);
         usdc.mint(maker3, 10_000_000e6);
         usdc.mint(taker, 10_000_000e6);
+
+        // Approve escrow for taker
+        vm.prank(taker);
+        usdc.approve(address(escrow), type(uint256).max);
     }
 
     // ═══════════════════════════════════════════
@@ -98,35 +109,22 @@ contract GasBenchmark is Test {
     }
 
     // ═══════════════════════════════════════════
-    //  Escrow — Intent Lifecycle
+    //  Escrow — Order Lifecycle
     // ═══════════════════════════════════════════
 
-    function test_gas_createIntent() public {
+    function test_gas_executeOrder() public {
         _stake(maker1, 50_000e6);
 
-        vm.startPrank(taker);
-        usdc.approve(address(escrow), 10_000e6);
-        escrow.createIntent(
-            address(usdc), 10_000e6, address(usdc), 9_990e6,
-            DEST_CHAIN_ID, DEST_ADDRESS, block.timestamp + 1 hours
-        );
-        vm.stopPrank();
-    }
-
-    function test_gas_commitToIntent() public {
-        _stake(maker1, 50_000e6);
-        bytes32 intentId = _createIntent(10_000e6);
+        DataTypes.Order memory order = _makeOrder(10_000e6);
+        bytes memory sig = _signOrder(order);
 
         vm.prank(maker1);
-        escrow.commitToIntent(intentId);
+        escrow.executeOrder(order, sig);
     }
 
     function test_gas_submitFill() public {
         _stake(maker1, 50_000e6);
-        bytes32 intentId = _createIntent(10_000e6);
-
-        vm.prank(maker1);
-        escrow.commitToIntent(intentId);
+        (bytes32 intentId, ) = _executeOrder(10_000e6);
 
         vm.prank(maker1);
         escrow.submitFill(intentId, keccak256("dest_tx"));
@@ -134,42 +132,42 @@ contract GasBenchmark is Test {
 
     function test_gas_settle() public {
         _stake(maker1, 50_000e6);
-        bytes32 intentId = _fillIntent(10_000e6);
+        (, DataTypes.Order memory order) = _fillIntent(10_000e6);
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
-        escrow.settle(intentId);
+        escrow.settle(order);
     }
 
     function test_gas_settleBatch_5() public {
         _stake(maker1, 500_000e6);
-        bytes32[] memory ids = new bytes32[](5);
+        DataTypes.Order[] memory orders = new DataTypes.Order[](5);
         for (uint256 i; i < 5; i++) {
-            ids[i] = _fillIntent(10_000e6);
+            (, orders[i]) = _fillIntent(10_000e6);
         }
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
-        escrow.settleBatch(ids);
+        escrow.settleBatch(orders);
     }
 
     function test_gas_settleBatch_10() public {
         _stake(maker1, 500_000e6);
-        bytes32[] memory ids = new bytes32[](10);
+        DataTypes.Order[] memory orders = new DataTypes.Order[](10);
         for (uint256 i; i < 10; i++) {
-            ids[i] = _fillIntent(10_000e6);
+            (, orders[i]) = _fillIntent(10_000e6);
         }
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
-        escrow.settleBatch(ids);
+        escrow.settleBatch(orders);
     }
 
     function test_gas_reclaimExpired() public {
         _stake(maker1, 50_000e6);
-        bytes32 intentId = _createIntent(10_000e6);
+        (, DataTypes.Order memory order) = _executeOrder(10_000e6);
 
-        vm.warp(block.timestamp + 2 hours);
+        vm.warp(block.timestamp + COMMITMENT_TIMEOUT + 1);
 
         vm.prank(taker);
-        escrow.reclaimExpired(intentId);
+        escrow.reclaimExpired(order);
     }
 
     // ═══════════════════════════════════════════
@@ -177,27 +175,27 @@ contract GasBenchmark is Test {
     // ═══════════════════════════════════════════
 
     function test_gas_dispute() public {
-        bytes32 intentId = _setupDisputableIntent();
+        (, DataTypes.Order memory order) = _setupDisputableIntent();
 
         vm.startPrank(maker2);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
     }
 
     function test_gas_resolveDispute() public {
-        bytes32 intentId = _setupDisputableIntent();
+        (bytes32 intentId, DataTypes.Order memory order) = _setupDisputableIntent();
 
         // Maker2 disputes
         vm.startPrank(maker2);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
 
         // Maker3 attests fill is valid
-        DataTypes.Intent memory intent = escrow.getIntent(intentId);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
         bytes memory sig = _signAttestation(
-            maker3Key, intentId, true, intent.fillTxHash, intent.destinationChainId
+            maker3Key, intentId, true, commitment.fillTxHash, order.destinationChainId
         );
         bytes[] memory sigs = new bytes[](1);
         sigs[0] = sig;
@@ -206,11 +204,11 @@ contract GasBenchmark is Test {
     }
 
     function test_gas_finalizeExpiredDispute() public {
-        bytes32 intentId = _setupDisputableIntent();
+        (bytes32 intentId, DataTypes.Order memory order) = _setupDisputableIntent();
 
         vm.startPrank(maker2);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
 
         vm.warp(block.timestamp + RESOLUTION_WINDOW + 1);
@@ -228,27 +226,57 @@ contract GasBenchmark is Test {
         vm.stopPrank();
     }
 
-    function _createIntent(uint256 amount) internal returns (bytes32) {
-        vm.startPrank(taker);
-        usdc.approve(address(escrow), amount);
-        bytes32 id = escrow.createIntent(
-            address(usdc), amount, address(usdc), amount - 10e6,
-            DEST_CHAIN_ID, DEST_ADDRESS, block.timestamp + 1 hours
-        );
-        vm.stopPrank();
-        return id;
+    function _makeOrder(uint256 amount) internal returns (DataTypes.Order memory) {
+        return DataTypes.Order({
+            taker: taker,
+            inputToken: address(usdc),
+            inputAmount: amount,
+            outputToken: address(usdc),
+            minOutputAmount: amount - 10e6,
+            destinationChainId: DEST_CHAIN_ID,
+            destinationAddress: DEST_ADDRESS,
+            expiry: block.timestamp + 1 hours,
+            nonce: _testNonce++
+        });
     }
 
-    function _fillIntent(uint256 amount) internal returns (bytes32) {
-        bytes32 id = _createIntent(amount);
+    function _signOrder(DataTypes.Order memory order) internal view returns (bytes memory) {
+        bytes32 structHash = keccak256(abi.encode(
+            IntentLib.ORDER_TYPEHASH,
+            order.taker,
+            order.inputToken,
+            order.inputAmount,
+            order.outputToken,
+            order.minOutputAmount,
+            order.destinationChainId,
+            order.destinationAddress,
+            order.expiry,
+            order.nonce
+        ));
+        bytes32 digest = MessageHashUtils.toTypedDataHash(
+            escrow.domainSeparator(), structHash
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(takerKey, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _executeOrder(uint256 amount) internal returns (bytes32, DataTypes.Order memory) {
+        DataTypes.Order memory order = _makeOrder(amount);
+        bytes memory sig = _signOrder(order);
+        vm.prank(maker1);
+        bytes32 id = escrow.executeOrder(order, sig);
+        return (id, order);
+    }
+
+    function _fillIntent(uint256 amount) internal returns (bytes32, DataTypes.Order memory) {
+        (bytes32 id, DataTypes.Order memory order) = _executeOrder(amount);
         vm.startPrank(maker1);
-        escrow.commitToIntent(id);
         escrow.submitFill(id, keccak256(abi.encodePacked("tx", id)));
         vm.stopPrank();
-        return id;
+        return (id, order);
     }
 
-    function _setupDisputableIntent() internal returns (bytes32) {
+    function _setupDisputableIntent() internal returns (bytes32, DataTypes.Order memory) {
         _stake(maker1, 50_000e6);
         _stake(maker2, 50_000e6);
         _stake(maker3, 50_000e6);

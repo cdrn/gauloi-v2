@@ -6,12 +6,13 @@ import {GauloiDisputes} from "../../src/GauloiDisputes.sol";
 import {IGauloiDisputes} from "../../src/interfaces/IGauloiDisputes.sol";
 import {DataTypes} from "../../src/types/DataTypes.sol";
 import {SignatureLib} from "../../src/libraries/SignatureLib.sol";
+import {IntentLib} from "../../src/libraries/IntentLib.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 contract GauloiDisputesTest is BaseTest {
     GauloiDisputes public disputes;
 
-    // Use actual private keys for signing
+    // Use actual private keys for signing (makers)
     uint256 public maker1Key = 0xA11CE;
     uint256 public maker2Key = 0xB0B;
     uint256 public maker3Key = 0xCAFE;
@@ -29,7 +30,9 @@ contract GauloiDisputesTest is BaseTest {
         maker2Addr = vm.addr(maker2Key);
         maker3Addr = vm.addr(maker3Key);
 
-        // Override the BaseTest makers with our keyed addresses
+        // Override the BaseTest taker with our keyed address
+        taker = vm.addr(takerKey);
+
         usdc = new MockERC20Harness("USD Coin", "USDC", 6);
         staking = new GauloiStaking(address(usdc), MIN_STAKE, COOLDOWN, owner);
 
@@ -61,6 +64,10 @@ contract GauloiDisputesTest is BaseTest {
         _stakeWithAddr(maker1Addr, 50_000e6);
         _stakeWithAddr(maker2Addr, 50_000e6);
         _stakeWithAddr(maker3Addr, 50_000e6);
+
+        // Approve escrow to pull from taker
+        vm.prank(taker);
+        usdc.approve(address(escrow), type(uint256).max);
     }
 
     function _stakeWithAddr(address maker, uint256 amount) internal {
@@ -70,23 +77,19 @@ contract GauloiDisputesTest is BaseTest {
         vm.stopPrank();
     }
 
-    function _createAndFillIntent(uint256 amount) internal returns (bytes32) {
-        // Taker creates intent
-        vm.startPrank(taker);
-        usdc.approve(address(escrow), amount);
-        bytes32 intentId = escrow.createIntent(
-            address(usdc), amount, address(usdc), amount - 10e6,
-            DEST_CHAIN_ID, DEST_ADDRESS, block.timestamp + 1 hours
-        );
-        vm.stopPrank();
+    function _createAndFillIntent(uint256 amount) internal returns (bytes32, DataTypes.Order memory) {
+        DataTypes.Order memory order = _makeOrder(amount, amount - 10e6);
+        bytes memory sig = _signOrder(takerKey, order);
 
-        // Maker1 commits and fills
+        // Maker1 executes and fills
+        vm.prank(maker1Addr);
+        bytes32 intentId = escrow.executeOrder(order, sig);
+
         vm.startPrank(maker1Addr);
-        escrow.commitToIntent(intentId);
         escrow.submitFill(intentId, keccak256("dest_tx"));
         vm.stopPrank();
 
-        return intentId;
+        return (intentId, order);
     }
 
     function _signAttestation(
@@ -109,11 +112,11 @@ contract GauloiDisputesTest is BaseTest {
     // --- Dispute creation ---
 
     function test_dispute() public {
-        bytes32 intentId = _createAndFillIntent(10_000e6);
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
 
         vm.startPrank(maker2Addr);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
 
         DataTypes.Dispute memory disp = disputes.getDispute(intentId);
@@ -121,8 +124,8 @@ contract GauloiDisputesTest is BaseTest {
         assertEq(disp.bondAmount, 50e6); // 0.5% of 10k = 50 USDC (above 25 min)
         assertFalse(disp.resolved);
 
-        // Intent should be Disputed
-        assertTrue(escrow.getIntent(intentId).state == DataTypes.IntentState.Disputed);
+        // Commitment should be Disputed
+        assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Disputed);
     }
 
     function test_dispute_bondCalculation() public view {
@@ -133,7 +136,7 @@ contract GauloiDisputesTest is BaseTest {
     }
 
     function test_dispute_notActiveMaker_reverts() public {
-        bytes32 intentId = _createAndFillIntent(10_000e6);
+        (, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
 
         address nobody = makeAddr("nobody");
         usdc.mint(nobody, 1_000e6);
@@ -141,61 +144,61 @@ contract GauloiDisputesTest is BaseTest {
         vm.startPrank(nobody);
         usdc.approve(address(disputes), type(uint256).max);
         vm.expectRevert("GauloiDisputes: not active maker");
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
     }
 
     function test_dispute_ownFill_reverts() public {
-        bytes32 intentId = _createAndFillIntent(10_000e6);
+        (, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
 
         vm.startPrank(maker1Addr);
         usdc.approve(address(disputes), type(uint256).max);
         vm.expectRevert("GauloiDisputes: cannot dispute own fill");
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
     }
 
     function test_dispute_alreadyDisputed_reverts() public {
-        bytes32 intentId = _createAndFillIntent(10_000e6);
+        (, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
 
         vm.startPrank(maker2Addr);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
 
         vm.startPrank(maker3Addr);
         usdc.approve(address(disputes), type(uint256).max);
         vm.expectRevert("GauloiDisputes: already disputed");
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
     }
 
     function test_dispute_afterWindowClosed_reverts() public {
-        bytes32 intentId = _createAndFillIntent(10_000e6);
+        (, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW + 1);
 
         vm.startPrank(maker2Addr);
         usdc.approve(address(disputes), type(uint256).max);
         vm.expectRevert("GauloiDisputes: window closed");
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
     }
 
     // --- Dispute resolution: fill valid ---
 
     function test_resolveDispute_fillValid() public {
-        bytes32 intentId = _createAndFillIntent(10_000e6);
-        DataTypes.Intent memory intent = escrow.getIntent(intentId);
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
 
         vm.startPrank(maker2Addr);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
 
         // Maker3 attests fill is valid
         bytes memory sig = _signAttestation(
-            maker3Key, intentId, true, intent.fillTxHash, intent.destinationChainId
+            maker3Key, intentId, true, commitment.fillTxHash, order.destinationChainId
         );
 
         bytes[] memory sigs = new bytes[](1);
@@ -215,23 +218,23 @@ contract GauloiDisputesTest is BaseTest {
         assertEq(maker1BalAfter - maker1BalBefore, 10_000e6 + bondAmount / 2);
 
         // Intent settled
-        assertTrue(escrow.getIntent(intentId).state == DataTypes.IntentState.Settled);
+        assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Settled);
     }
 
     // --- Dispute resolution: fill invalid ---
 
     function test_resolveDispute_fillInvalid() public {
-        bytes32 intentId = _createAndFillIntent(10_000e6);
-        DataTypes.Intent memory intent = escrow.getIntent(intentId);
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
 
         vm.startPrank(maker2Addr);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
 
         // Maker3 attests fill is invalid
         bytes memory sig = _signAttestation(
-            maker3Key, intentId, false, intent.fillTxHash, intent.destinationChainId
+            maker3Key, intentId, false, commitment.fillTxHash, order.destinationChainId
         );
 
         bytes[] memory sigs = new bytes[](1);
@@ -258,16 +261,16 @@ contract GauloiDisputesTest is BaseTest {
     // --- Signature verification ---
 
     function test_resolveDispute_duplicateSigner_reverts() public {
-        bytes32 intentId = _createAndFillIntent(10_000e6);
-        DataTypes.Intent memory intent = escrow.getIntent(intentId);
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
 
         vm.startPrank(maker2Addr);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
 
         bytes memory sig = _signAttestation(
-            maker3Key, intentId, true, intent.fillTxHash, intent.destinationChainId
+            maker3Key, intentId, true, commitment.fillTxHash, order.destinationChainId
         );
 
         bytes[] memory sigs = new bytes[](2);
@@ -279,17 +282,17 @@ contract GauloiDisputesTest is BaseTest {
     }
 
     function test_resolveDispute_makerCannotAttestOwn_reverts() public {
-        bytes32 intentId = _createAndFillIntent(10_000e6);
-        DataTypes.Intent memory intent = escrow.getIntent(intentId);
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
 
         vm.startPrank(maker2Addr);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
 
         // Maker1 (the disputed maker) tries to attest their own fill
         bytes memory sig = _signAttestation(
-            maker1Key, intentId, true, intent.fillTxHash, intent.destinationChainId
+            maker1Key, intentId, true, commitment.fillTxHash, order.destinationChainId
         );
 
         bytes[] memory sigs = new bytes[](1);
@@ -300,17 +303,17 @@ contract GauloiDisputesTest is BaseTest {
     }
 
     function test_resolveDispute_challengerCannotAttest_reverts() public {
-        bytes32 intentId = _createAndFillIntent(10_000e6);
-        DataTypes.Intent memory intent = escrow.getIntent(intentId);
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
 
         vm.startPrank(maker2Addr);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
 
         // Maker2 (challenger) tries to attest
         bytes memory sig = _signAttestation(
-            maker2Key, intentId, true, intent.fillTxHash, intent.destinationChainId
+            maker2Key, intentId, true, commitment.fillTxHash, order.destinationChainId
         );
 
         bytes[] memory sigs = new bytes[](1);
@@ -323,11 +326,11 @@ contract GauloiDisputesTest is BaseTest {
     // --- Expired dispute (defaults to fill-valid) ---
 
     function test_finalizeExpiredDispute() public {
-        bytes32 intentId = _createAndFillIntent(10_000e6);
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
 
         vm.startPrank(maker2Addr);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
 
         vm.warp(block.timestamp + RESOLUTION_WINDOW + 1);
@@ -346,11 +349,12 @@ contract GauloiDisputesTest is BaseTest {
     }
 
     function test_finalizeExpiredDispute_beforeDeadline_reverts() public {
-        bytes32 intentId = _createAndFillIntent(10_000e6);
+        (, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        bytes32 intentId = IntentLib.computeIntentId(order);
 
         vm.startPrank(maker2Addr);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
 
         vm.expectRevert("GauloiDisputes: deadline not passed");
@@ -358,18 +362,18 @@ contract GauloiDisputesTest is BaseTest {
     }
 
     function test_resolveDispute_afterDeadline_reverts() public {
-        bytes32 intentId = _createAndFillIntent(10_000e6);
-        DataTypes.Intent memory intent = escrow.getIntent(intentId);
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
 
         vm.startPrank(maker2Addr);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
 
         vm.warp(block.timestamp + RESOLUTION_WINDOW + 1);
 
         bytes memory sig = _signAttestation(
-            maker3Key, intentId, true, intent.fillTxHash, intent.destinationChainId
+            maker3Key, intentId, true, commitment.fillTxHash, order.destinationChainId
         );
 
         bytes[] memory sigs = new bytes[](1);

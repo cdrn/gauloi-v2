@@ -1,11 +1,14 @@
 import WebSocket from "ws";
-import { erc20Abi } from "viem";
+import { randomBytes } from "crypto";
+import { erc20Abi, keccak256, encodePacked, encodeAbiParameters } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
   GauloiEscrowAbi,
   getPublicClient,
   getWalletClient,
   SUPPORTED_CHAINS,
+  signOrder,
+  type OrderMessage,
 } from "@gauloi/common";
 
 interface CreateIntentOptions {
@@ -54,60 +57,94 @@ export async function createIntent(options: CreateIntentOptions): Promise<void> 
   const minOutput = BigInt(options.minOutput);
   const destChainId = BigInt(options.destChain);
   const destAddress = options.destAddress as `0x${string}`;
-  const expiry = Math.floor(Date.now() / 1000) + parseInt(options.expiry);
+  const expiry = BigInt(Math.floor(Date.now() / 1000) + parseInt(options.expiry));
 
-  console.log("Creating intent...");
+  // Generate random nonce
+  const nonce = BigInt("0x" + randomBytes(32).toString("hex"));
+
+  console.log("Creating signed order...");
   console.log(`  Taker:        ${account.address}`);
   console.log(`  Input:        ${inputAmount} of ${inputToken}`);
   console.log(`  Output:       min ${minOutput} of ${outputToken}`);
   console.log(`  Dest chain:   ${destChainId}`);
   console.log(`  Dest address: ${destAddress}`);
-  console.log(`  Expiry:       ${new Date(expiry * 1000).toISOString()}`);
+  console.log(`  Expiry:       ${new Date(Number(expiry) * 1000).toISOString()}`);
 
-  // 1. Approve escrow to spend input tokens
-  console.log("\nApproving token spend...");
-  const approveTx = await walletClient.writeContract({
+  const order: OrderMessage = {
+    taker: account.address,
+    inputToken,
+    inputAmount,
+    outputToken,
+    minOutputAmount: minOutput,
+    destinationChainId: destChainId,
+    destinationAddress: destAddress,
+    expiry,
+    nonce,
+  };
+
+  // 1. Check allowance and approve if needed
+  const allowance = await publicClient.readContract({
     address: inputToken,
     abi: erc20Abi,
-    functionName: "approve",
-    args: [sourceChainConfig.escrowAddress, inputAmount],
+    functionName: "allowance",
+    args: [account.address, sourceChainConfig.escrowAddress],
   });
-  console.log(`  Approve tx: ${approveTx}`);
 
-  // 2. Create intent on-chain
-  console.log("Creating intent on-chain...");
-  const createTx = await walletClient.writeContract({
-    address: sourceChainConfig.escrowAddress,
-    abi: GauloiEscrowAbi,
-    functionName: "createIntent",
-    args: [
-      inputToken,
-      inputAmount,
-      outputToken,
-      minOutput,
-      destChainId,
-      destAddress,
-      BigInt(expiry),
-    ],
-  });
-  console.log(`  Create tx: ${createTx}`);
-
-  // 3. Get the intent ID from the receipt
-  const receipt = await publicClient.waitForTransactionReceipt({ hash: createTx });
-  const intentCreatedLog = receipt.logs.find(
-    (log) => log.topics[0] === "0x" // Will match IntentCreated event
-  );
-
-  // Parse intent ID from first indexed topic of IntentCreated event
-  const intentId = receipt.logs[0]?.topics[1] as `0x${string}` | undefined;
-  if (!intentId) {
-    console.error("Failed to get intent ID from transaction receipt");
-    process.exit(1);
+  if (allowance < inputAmount) {
+    console.log("\nApproving token spend...");
+    const approveTx = await walletClient.writeContract({
+      address: inputToken,
+      abi: erc20Abi,
+      functionName: "approve",
+      args: [sourceChainConfig.escrowAddress, inputAmount],
+    });
+    console.log(`  Approve tx: ${approveTx}`);
+    await publicClient.waitForTransactionReceipt({ hash: approveTx });
+  } else {
+    console.log("\nToken allowance sufficient, skipping approval.");
   }
 
-  console.log(`\nIntent created: ${intentId}`);
+  // 2. Sign order off-chain (0 gas!)
+  console.log("Signing order (EIP-712)...");
+  const takerSignature = await signOrder(
+    walletClient,
+    order,
+    sourceChainConfig.escrowAddress,
+    sourceChainConfig.chainId,
+  );
+  console.log(`  Signature: ${takerSignature.slice(0, 20)}...`);
 
-  // 4. Broadcast to relay and wait for quotes
+  // 3. Compute intentId locally
+  const intentId = keccak256(
+    encodeAbiParameters(
+      [
+        { type: "address" },
+        { type: "address" },
+        { type: "uint256" },
+        { type: "address" },
+        { type: "uint256" },
+        { type: "uint256" },
+        { type: "address" },
+        { type: "uint256" },
+        { type: "uint256" },
+      ],
+      [
+        account.address,
+        inputToken,
+        inputAmount,
+        outputToken,
+        minOutput,
+        destChainId,
+        destAddress,
+        expiry,
+        nonce,
+      ],
+    ),
+  );
+
+  console.log(`\nIntent ID: ${intentId}`);
+
+  // 4. Broadcast signed order + signature to relay
   console.log("\nBroadcasting to relay, waiting for quotes...");
 
   const ws = new WebSocket(options.relay);
@@ -125,12 +162,14 @@ export async function createIntent(options: CreateIntentOptions): Promise<void> 
           destinationChainId: Number(destChainId),
           destinationAddress: destAddress,
           minOutputAmount: minOutput.toString(),
-          expiry,
+          expiry: Number(expiry),
+          nonce: nonce.toString(),
+          takerSignature,
           sourceChainId: 1,
         },
       }),
     );
-    console.log("Intent broadcast to relay.");
+    console.log("Signed order broadcast to relay.");
   });
 
   ws.on("message", (raw) => {

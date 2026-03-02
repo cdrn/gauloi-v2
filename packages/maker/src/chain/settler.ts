@@ -6,14 +6,19 @@ import {
   type Hash,
 } from "viem";
 import { type PrivateKeyAccount } from "viem/accounts";
-import { GauloiEscrowAbi } from "@gauloi/common";
+import { GauloiEscrowAbi, type Order } from "@gauloi/common";
+
+interface PendingIntent {
+  intentId: `0x${string}`;
+  order: Order;
+}
 
 /**
  * Periodically settles matured intents via settleBatch.
  */
 export class Settler {
   private interval: ReturnType<typeof setInterval> | null = null;
-  private pendingIntents = new Set<`0x${string}`>();
+  private pendingIntents = new Map<`0x${string}`, PendingIntent>();
 
   constructor(
     private publicClient: PublicClient<Transport, Chain>,
@@ -25,8 +30,8 @@ export class Settler {
   /**
    * Track an intent that has been filled and is waiting for settlement.
    */
-  trackFill(intentId: `0x${string}`, disputeWindowEnd: number): void {
-    this.pendingIntents.add(intentId);
+  trackFill(intentId: `0x${string}`, disputeWindowEnd: number, order: Order): void {
+    this.pendingIntents.set(intentId, { intentId, order });
   }
 
   /**
@@ -51,27 +56,27 @@ export class Settler {
     if (this.pendingIntents.size === 0) return null;
 
     // Check which intents are past their dispute window
-    const matured: `0x${string}`[] = [];
+    const matured: PendingIntent[] = [];
 
-    for (const intentId of this.pendingIntents) {
+    for (const [intentId, pending] of this.pendingIntents) {
       try {
-        const intent = await this.publicClient.readContract({
+        const commitment = await this.publicClient.readContract({
           address: this.escrowAddress,
           abi: GauloiEscrowAbi,
-          functionName: "getIntent",
+          functionName: "getCommitment",
           args: [intentId],
         });
 
         const now = BigInt(Math.floor(Date.now() / 1000));
 
-        // intent[13] is disputeWindowEnd in the struct tuple
-        // State must be Filled (2) and past dispute window
-        if (intent.state === 2 && intent.disputeWindowEnd <= now) {
-          matured.push(intentId);
+        // State must be Filled (1) and past dispute window
+        if (commitment.state === 1 && BigInt(commitment.disputeWindowEnd) <= now) {
+          matured.push(pending);
         }
 
         // Remove settled/expired intents from tracking
-        if (intent.state === 3 || intent.state === 5) {
+        // Settled = 2, Expired = 4
+        if (commitment.state === 2 || commitment.state === 4) {
           this.pendingIntents.delete(intentId);
         }
       } catch {
@@ -83,18 +88,20 @@ export class Settler {
 
     console.log(`Settling ${matured.length} matured intent(s)...`);
 
+    const orders = matured.map((p) => p.order);
+
     const hash = await this.walletClient.writeContract({
       address: this.escrowAddress,
       abi: GauloiEscrowAbi,
       functionName: "settleBatch",
-      args: [matured],
+      args: [orders],
     });
 
     await this.publicClient.waitForTransactionReceipt({ hash });
 
     // Remove settled intents from tracking
-    for (const id of matured) {
-      this.pendingIntents.delete(id);
+    for (const p of matured) {
+      this.pendingIntents.delete(p.intentId);
     }
 
     console.log(`Settled ${matured.length} intent(s): ${hash}`);

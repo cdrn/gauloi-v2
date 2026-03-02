@@ -10,8 +10,8 @@ interface IGauloiDisputes {
     event ChallengerRewarded(address indexed challenger, uint256 reward);
     event ChallengerBondSlashed(address indexed challenger, uint256 amount);
 
-    // Any staked maker disputes a fill
-    function dispute(bytes32 intentId) external;
+    // Any staked maker disputes a fill (stores order for later resolution)
+    function dispute(DataTypes.Order calldata order) external;
 
     // Resolve via M/N EIP-712 signatures from staked makers
     function resolveDispute(

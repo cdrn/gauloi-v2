@@ -8,6 +8,7 @@ import {GauloiStaking} from "../../src/GauloiStaking.sol";
 import {GauloiEscrow} from "../../src/GauloiEscrow.sol";
 import {GauloiDisputes} from "../../src/GauloiDisputes.sol";
 import {DataTypes} from "../../src/types/DataTypes.sol";
+import {IntentLib} from "../../src/libraries/IntentLib.sol";
 import {SignatureLib} from "../../src/libraries/SignatureLib.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
@@ -33,7 +34,10 @@ contract ForkSettlementTest is Test {
     IERC20 public usdt;
 
     address public owner = makeAddr("owner");
-    address public taker = makeAddr("taker");
+
+    // Taker with private key for signing
+    uint256 public takerKey = 0x7A4E5;
+    address public taker;
 
     uint256 public makerAKey = 0xA1;
     uint256 public makerBKey = 0xB2;
@@ -52,11 +56,14 @@ contract ForkSettlementTest is Test {
     uint256 constant DEST_CHAIN = 42161;
     address constant DEST_ADDR = address(0xBEEF);
 
+    uint256 internal _testNonce;
+
     function setUp() public {
         // Fork must be active — set via --fork-url or foundry.toml [profile.fork]
         usdc = IERC20(USDC);
         usdt = IERC20(USDT);
 
+        taker = vm.addr(takerKey);
         makerA = vm.addr(makerAKey);
         makerB = vm.addr(makerBKey);
         makerC = vm.addr(makerCKey);
@@ -85,6 +92,12 @@ contract ForkSettlementTest is Test {
         _fundFromWhale(USDC_WHALE, USDC, taker, 500_000e6);
         _fundFromWhale(USDT_WHALE, USDT, taker, 500_000e6);
 
+        // Approve escrow for taker (both tokens)
+        vm.startPrank(taker);
+        usdc.approve(address(escrow), type(uint256).max);
+        usdt.forceApprove(address(escrow), type(uint256).max);
+        vm.stopPrank();
+
         // Stake all makers
         _stake(makerA, 100_000e6);
         _stake(makerB, 100_000e6);
@@ -101,6 +114,45 @@ contract ForkSettlementTest is Test {
         usdc.approve(address(staking), amount);
         staking.stake(amount);
         vm.stopPrank();
+    }
+
+    function _makeOrder(
+        address inputToken,
+        uint256 inputAmount,
+        address outputToken,
+        uint256 minOutput
+    ) internal returns (DataTypes.Order memory) {
+        return DataTypes.Order({
+            taker: taker,
+            inputToken: inputToken,
+            inputAmount: inputAmount,
+            outputToken: outputToken,
+            minOutputAmount: minOutput,
+            destinationChainId: DEST_CHAIN,
+            destinationAddress: DEST_ADDR,
+            expiry: block.timestamp + 1 hours,
+            nonce: _testNonce++
+        });
+    }
+
+    function _signOrder(DataTypes.Order memory order) internal view returns (bytes memory) {
+        bytes32 structHash = keccak256(abi.encode(
+            IntentLib.ORDER_TYPEHASH,
+            order.taker,
+            order.inputToken,
+            order.inputAmount,
+            order.outputToken,
+            order.minOutputAmount,
+            order.destinationChainId,
+            order.destinationAddress,
+            order.expiry,
+            order.nonce
+        ));
+        bytes32 digest = MessageHashUtils.toTypedDataHash(
+            escrow.domainSeparator(), structHash
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(takerKey, digest);
+        return abi.encodePacked(r, s, v);
     }
 
     function _signAttestation(
@@ -125,35 +177,29 @@ contract ForkSettlementTest is Test {
         uint256 takerBalBefore = usdc.balanceOf(taker);
         uint256 makerBalBefore = usdc.balanceOf(makerA);
 
-        // 1. Taker creates intent: 50k USDC
-        vm.startPrank(taker);
-        usdc.approve(address(escrow), 50_000e6);
-        bytes32 intentId = escrow.createIntent(
-            USDC, 50_000e6, USDC, 49_900e6,
-            DEST_CHAIN, DEST_ADDR, block.timestamp + 1 hours
-        );
-        vm.stopPrank();
+        // 1. Taker signs order, maker executes
+        DataTypes.Order memory order = _makeOrder(USDC, 50_000e6, USDC, 49_900e6);
+        bytes memory sig = _signOrder(order);
+
+        vm.prank(makerA);
+        bytes32 intentId = escrow.executeOrder(order, sig);
 
         assertEq(usdc.balanceOf(taker), takerBalBefore - 50_000e6);
         assertEq(usdc.balanceOf(address(escrow)), 50_000e6);
 
-        // 2. MakerA commits
-        vm.prank(makerA);
-        escrow.commitToIntent(intentId);
-
-        // 3. MakerA submits fill evidence
+        // 2. MakerA submits fill evidence
         vm.prank(makerA);
         escrow.submitFill(intentId, keccak256("arb_tx_real"));
 
-        // 4. Wait for settlement window
+        // 3. Wait for settlement window
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
 
-        // 5. Settle
-        escrow.settle(intentId);
+        // 4. Settle
+        escrow.settle(order);
 
         // Verify
         assertEq(usdc.balanceOf(makerA), makerBalBefore + 50_000e6);
-        assertTrue(escrow.getIntent(intentId).state == DataTypes.IntentState.Settled);
+        assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Settled);
         assertEq(staking.getMakerInfo(makerA).activeExposure, 0);
     }
 
@@ -164,56 +210,49 @@ contract ForkSettlementTest is Test {
     function test_fork_USDT_happyPath() public {
         uint256 takerUsdtBefore = usdt.balanceOf(taker);
 
-        // Taker deposits USDT, wants USDC on Arbitrum
-        vm.startPrank(taker);
-        // USDT's approve doesn't return bool — must use forceApprove
-        usdt.forceApprove(address(escrow), 25_000e6);
-        bytes32 intentId = escrow.createIntent(
-            USDT, 25_000e6, USDC, 24_950e6,
-            DEST_CHAIN, DEST_ADDR, block.timestamp + 1 hours
-        );
-        vm.stopPrank();
+        // Taker signs USDT order, maker executes
+        DataTypes.Order memory order = _makeOrder(USDT, 25_000e6, USDC, 24_950e6);
+        bytes memory sig = _signOrder(order);
+
+        vm.prank(makerA);
+        bytes32 intentId = escrow.executeOrder(order, sig);
 
         assertEq(usdt.balanceOf(taker), takerUsdtBefore - 25_000e6);
         assertEq(usdt.balanceOf(address(escrow)), 25_000e6);
 
-        // Maker commits and fills
-        vm.prank(makerA);
-        escrow.commitToIntent(intentId);
-
+        // Maker submits fill
         vm.prank(makerA);
         escrow.submitFill(intentId, keccak256("fill_usdt"));
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
-        escrow.settle(intentId);
+        escrow.settle(order);
 
         // Maker receives USDT (the input token)
         assertEq(usdt.balanceOf(makerA), 25_000e6);
-        assertTrue(escrow.getIntent(intentId).state == DataTypes.IntentState.Settled);
+        assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Settled);
     }
 
     // =========================================================================
-    // Real USDT: taker reclaims expired intent (tests USDT transfer back)
+    // Real USDT: taker reclaims expired commitment
     // =========================================================================
 
     function test_fork_USDT_expiry_reclaim() public {
-        vm.startPrank(taker);
-        usdt.forceApprove(address(escrow), 10_000e6);
-        bytes32 intentId = escrow.createIntent(
-            USDT, 10_000e6, USDC, 9_990e6,
-            DEST_CHAIN, DEST_ADDR, block.timestamp + 1 hours
-        );
-        vm.stopPrank();
+        DataTypes.Order memory order = _makeOrder(USDT, 10_000e6, USDC, 9_990e6);
+        bytes memory sig = _signOrder(order);
+
+        vm.prank(makerA);
+        escrow.executeOrder(order, sig);
 
         uint256 takerBalBefore = usdt.balanceOf(taker);
 
-        vm.warp(block.timestamp + 2 hours);
+        vm.warp(block.timestamp + COMMITMENT_TIMEOUT + 1);
 
         vm.prank(taker);
-        escrow.reclaimExpired(intentId);
+        escrow.reclaimExpired(order);
 
         assertEq(usdt.balanceOf(taker) - takerBalBefore, 10_000e6);
-        assertTrue(escrow.getIntent(intentId).state == DataTypes.IntentState.Expired);
+        bytes32 intentId = IntentLib.computeIntentId(order);
+        assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Expired);
     }
 
     // =========================================================================
@@ -221,27 +260,24 @@ contract ForkSettlementTest is Test {
     // =========================================================================
 
     function test_fork_USDC_batchSettle() public {
-        bytes32[] memory ids = new bytes32[](3);
+        DataTypes.Order[] memory orders = new DataTypes.Order[](3);
 
         for (uint256 i = 0; i < 3; i++) {
-            vm.startPrank(taker);
-            usdc.approve(address(escrow), 10_000e6);
-            ids[i] = escrow.createIntent(
-                USDC, 10_000e6, USDC, 9_990e6,
-                DEST_CHAIN, DEST_ADDR, block.timestamp + 1 hours
-            );
-            vm.stopPrank();
+            orders[i] = _makeOrder(USDC, 10_000e6, USDC, 9_990e6);
+            bytes memory sig = _signOrder(orders[i]);
+
+            vm.prank(makerA);
+            bytes32 intentId = escrow.executeOrder(orders[i], sig);
 
             vm.startPrank(makerA);
-            escrow.commitToIntent(ids[i]);
-            escrow.submitFill(ids[i], keccak256(abi.encode("fill", i)));
+            escrow.submitFill(intentId, keccak256(abi.encode("fill", i)));
             vm.stopPrank();
         }
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
 
         uint256 makerBalBefore = usdc.balanceOf(makerA);
-        escrow.settleBatch(ids);
+        escrow.settleBatch(orders);
 
         assertEq(usdc.balanceOf(makerA) - makerBalBefore, 30_000e6);
         assertEq(staking.getMakerInfo(makerA).activeExposure, 0);
@@ -252,21 +288,16 @@ contract ForkSettlementTest is Test {
     // =========================================================================
 
     function test_fork_USDC_dispute_fillInvalid() public {
-        // Create intent
-        vm.startPrank(taker);
-        usdc.approve(address(escrow), 20_000e6);
-        bytes32 intentId = escrow.createIntent(
-            USDC, 20_000e6, USDC, 19_950e6,
-            DEST_CHAIN, DEST_ADDR, block.timestamp + 1 hours
-        );
-        vm.stopPrank();
+        // Create and fill
+        DataTypes.Order memory order = _makeOrder(USDC, 20_000e6, USDC, 19_950e6);
+        bytes memory sig = _signOrder(order);
 
-        // MakerA commits and submits fake fill
         bytes32 fakeFill = keccak256("fake");
-        vm.startPrank(makerA);
-        escrow.commitToIntent(intentId);
+        vm.prank(makerA);
+        bytes32 intentId = escrow.executeOrder(order, sig);
+
+        vm.prank(makerA);
         escrow.submitFill(intentId, fakeFill);
-        vm.stopPrank();
 
         uint256 makerAStake = staking.getMakerInfo(makerA).stakedAmount;
 
@@ -274,13 +305,13 @@ contract ForkSettlementTest is Test {
         uint256 bondAmount = disputes.calculateDisputeBond(20_000e6);
         vm.startPrank(makerB);
         usdc.approve(address(disputes), bondAmount);
-        disputes.dispute(intentId);
+        disputes.dispute(order);
         vm.stopPrank();
 
         // MakerC attests: fill is invalid
-        bytes memory sig = _signAttestation(makerCKey, intentId, false, fakeFill, DEST_CHAIN);
+        bytes memory attestSig = _signAttestation(makerCKey, intentId, false, fakeFill, DEST_CHAIN);
         bytes[] memory sigs = new bytes[](1);
-        sigs[0] = sig;
+        sigs[0] = attestSig;
 
         uint256 takerBalBefore = usdc.balanceOf(taker);
         uint256 makerBBalBefore = usdc.balanceOf(makerB);
