@@ -10,82 +10,76 @@ This post is about how it actually works. The escrow state machine, the dispute 
 
 ## 2. The escrow state machine
 
-Everything starts with an escrow contract on the source chain. The taker locks funds, the protocol coordinates the fill, and the escrow releases once settlement finalises.
+Everything starts with an escrow contract on the source chain. The taker signs an order, the maker pulls the funds when they commit, and the escrow releases once settlement finalises.
 
-The lifecycle has six states. A taker deposits into the escrow with their intent parameters (output token, destination chain, destination address, minimum amount, expiry) and the intent goes OPEN. A maker commits on-chain, reserving the intent so nobody else can front-run the fill - this adds a gas cost but prevents two makers from racing to fill the same intent. The maker then has N blocks to fill before the commitment expires and the intent reopens.
+The lifecycle has five on-chain states. The taker signs an EIP-712 order off-chain with their intent parameters (output token, destination chain, destination address, minimum amount, expiry, nonce) — this costs zero gas. There is no on-chain "OPEN" state. A maker calls `executeOrder` with the signed order and the taker's signature, which verifies the signature, pulls tokens from the taker into escrow, and creates the COMMITTED state directly. This single transaction replaces the old two-step `createIntent` + `commitToIntent` flow. The maker then has N blocks to fill before the commitment expires.
 
-Once the maker has sent the correct token to the taker's destination address on chain B, they submit a claim to the escrow on chain A with the destination tx hash. This moves the intent to FILLED and starts the dispute window. If the window passes without a challenge, the escrow releases the taker's deposit to the maker. If someone disputes, it escalates to the staked maker set for resolution. If no maker ever commits, or a committed maker doesn't fill in time, the taker reclaims their deposit.
+Once the maker has sent the correct token to the taker's destination address on chain B, they submit a claim to the escrow on chain A with the destination tx hash. This moves the intent to FILLED and starts the dispute window. If the window passes without a challenge, the escrow releases the taker's deposit to the maker. If someone disputes, it escalates to the staked maker set for resolution. If a committed maker doesn't fill in time, the taker reclaims their deposit. If no maker ever picks up a signed order, the tokens were never pulled and there's nothing to reclaim.
 
-The on-chain footprint in the happy path is two to three transactions: taker deposits, maker commits, maker claims. The fill itself happens on chain B and only touches chain A when the maker submits evidence.
+The on-chain footprint in the happy path is two transactions on chain A: maker executes order (pulling taker's tokens), maker submits fill evidence. The taker pays zero gas — only a signature. The fill itself happens on chain B and only touches chain A when the maker submits evidence.
 
 The contract interface looks roughly like this:
 
 ```solidity
-enum IntentState { Open, Committed, Filled, Settled, Disputed, Expired }
+enum IntentState { Committed, Filled, Settled, Disputed, Expired }
 
-struct Intent {
+// Signed off-chain by taker (never stored on-chain)
+struct Order {
     address taker;
     address inputToken;
     uint256 inputAmount;
-    uint256 destinationChain;
-    address destinationAddress;
     address outputToken;
     uint256 minOutputAmount;
+    uint256 destinationChainId;
+    address destinationAddress;
     uint256 expiry;
+    uint256 nonce;
+}
+
+// On-chain commitment — only mutable state (3 storage slots)
+struct Commitment {
+    address taker;       // slot 1 (with state)
     IntentState state;
-    address maker;
-    bytes32 fillTxHash;
-    uint256 disputeWindowEnd;
+    address maker;       // slot 2 (with deadlines)
+    uint40 commitmentDeadline;
+    uint40 disputeWindowEnd;
+    bytes32 fillTxHash;  // slot 3
 }
 
 // --- Maker staking ---
 
-// Maker deposits stake to join the network.
-// Stake token set at deployment (see open questions).
 function stake(uint256 amount) external;
-
-// Maker withdraws stake. Subject to cooldown
-// to prevent unstaking immediately after a fraudulent fill.
-function unstake(uint256 amount) external;
+function requestUnstake(uint256 amount) external;
+function completeUnstake() external; // after cooldown
 
 // --- Intent lifecycle ---
 
-// Taker approves inputToken first, then calls this.
-// Transfers inputAmount of inputToken into escrow.
-function createIntent(
-    address inputToken,
-    uint256 inputAmount,
-    address outputToken,
-    uint256 minOutputAmount,
-    uint256 destinationChain,
-    address destinationAddress,
-    uint256 expiry
+// Taker approves inputToken to escrow, then signs an EIP-712 order off-chain (0 gas).
+// Maker calls executeOrder with the signed order — verifies signature, pulls tokens
+// from taker, creates Commitment. Replaces the old createIntent + commitToIntent.
+function executeOrder(
+    Order calldata order,
+    bytes calldata takerSignature
 ) external returns (bytes32 intentId);
 
-// Staked maker reserves an intent. Reverts if caller
-// has insufficient stake for the fill amount.
-function commitToIntent(bytes32 intentId) external;
-
 // Maker submits evidence of fill on destination chain.
-// Starts the dispute window.
 function submitFill(bytes32 intentId, bytes32 destinationTxHash) external;
 
-// Anyone can call after dispute window expires
-// with no active dispute. Releases escrow to maker.
-function settle(bytes32 intentId) external;
+// Anyone can call after dispute window expires.
+// Order passed as calldata — intentId recomputed from hash.
+function settle(Order calldata order) external;
+function settleBatch(Order[] calldata orders) external;
 
-// Taker reclaims deposit if intent expired
-// or committed maker failed to fill in time.
-function reclaimExpired(bytes32 intentId) external;
+// Taker reclaims if committed maker failed to fill in time.
+function reclaimExpired(Order calldata order) external;
 
 // --- Disputes ---
 
 // Any staked maker can challenge a fill claim.
-// Bond amount calculated from fill size, transferred from caller.
-function dispute(bytes32 intentId) external;
+// Stores the order for later resolution.
+function dispute(Order calldata order) external;
 
 // Staked makers submit attestations to resolve a dispute.
-// M/N threshold of signatures triggers resolution.
 function resolveDispute(
     bytes32 intentId,
     bool fillValid,
@@ -93,7 +87,7 @@ function resolveDispute(
 ) external;
 ```
 
-Not final, but this is the shape of it.
+This is the actual shape of the deployed contracts.
 
 ## 3. The dispute mechanism
 

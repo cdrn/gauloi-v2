@@ -1,6 +1,20 @@
 # gauloi-v2
 Cross chain stablecoin swapping protocol with baked in compliance
 
+## Architecture
+
+Gasless intent creation via EIP-712 signed orders. The taker signs an order off-chain (0 gas), and the maker calls `executeOrder` with the signed order to pull tokens and commit in a single transaction.
+
+```
+[Off-chain: Taker signs EIP-712 order]
+         |
+         v
+    Committed --> Filled --> Settled
+         |            |
+         +-> Expired   +-> Disputed --> Settled (fill valid)
+            (reclaim)                   +-> Refunded (fill invalid)
+```
+
 ## Testnet Deployments
 
 ### Sepolia (Chain ID: 11155111)
@@ -8,18 +22,18 @@ Cross chain stablecoin swapping protocol with baked in compliance
 | Contract | Address | Verified |
 |----------|---------|----------|
 | USDC (Circle) | [`0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`](https://sepolia.etherscan.io/address/0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238) | - |
-| GauloiStaking | [`0xa9C45d4f33639B2F12B80d6d1C1B7124c5197778`](https://sepolia.etherscan.io/address/0xa9C45d4f33639B2F12B80d6d1C1B7124c5197778) | Yes |
-| GauloiEscrow | [`0x1786C39875819c90C8834D099CB182D2BF156E77`](https://sepolia.etherscan.io/address/0x1786C39875819c90C8834D099CB182D2BF156E77) | Yes |
-| GauloiDisputes | [`0x34C49c7fe668cDdD13a8Af5677d3d71d57eFdddc`](https://sepolia.etherscan.io/address/0x34C49c7fe668cDdD13a8Af5677d3d71d57eFdddc) | Yes |
+| GauloiStaking | [`0xc157d212a20361f8DBD4D6D890Ba19C62E1bf181`](https://sepolia.etherscan.io/address/0xc157d212a20361f8DBD4D6D890Ba19C62E1bf181) | Yes |
+| GauloiEscrow | [`0x61bc65601290bD7CBfF2461a1C2B81d0892064Dd`](https://sepolia.etherscan.io/address/0x61bc65601290bD7CBfF2461a1C2B81d0892064Dd) | Yes |
+| GauloiDisputes | [`0xf9fFa89F4B3d3b63c389D91B06D805534BcE9256`](https://sepolia.etherscan.io/address/0xf9fFa89F4B3d3b63c389D91B06D805534BcE9256) | Yes |
 
 ### Arbitrum Sepolia (Chain ID: 421614)
 
 | Contract | Address | Verified |
 |----------|---------|----------|
 | USDC (Circle) | [`0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d`](https://sepolia.arbiscan.io/address/0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d) | - |
-| GauloiStaking | [`0x123EAF1845C35639fd5481485cdc94c61780B0A5`](https://sepolia.arbiscan.io/address/0x123EAF1845C35639fd5481485cdc94c61780B0A5) | Yes |
-| GauloiEscrow | [`0x6f46388f43Fbd7EB5466c027352BC0bC520F29BC`](https://sepolia.arbiscan.io/address/0x6f46388f43Fbd7EB5466c027352BC0bC520F29BC) | Yes |
-| GauloiDisputes | [`0xAc3eff975782457B1559A3aD5D53856f81c7e962`](https://sepolia.arbiscan.io/address/0xAc3eff975782457B1559A3aD5D53856f81c7e962) | Yes |
+| GauloiStaking | [`0x34C49c7fe668cDdD13a8Af5677d3d71d57eFdddc`](https://sepolia.arbiscan.io/address/0x34C49c7fe668cDdD13a8Af5677d3d71d57eFdddc) | Yes |
+| GauloiEscrow | [`0x94AC29e9888314Bf9Addc60c7CB3FFa876e7565a`](https://sepolia.arbiscan.io/address/0x94AC29e9888314Bf9Addc60c7CB3FFa876e7565a) | Yes |
+| GauloiDisputes | [`0xe2D845c033F8BEF0d10c6c1B06BdE4882f3b0f8a`](https://sepolia.arbiscan.io/address/0xe2D845c033F8BEF0d10c6c1B06BdE4882f3b0f8a) | Yes |
 
 ### Testnet Parameters
 
@@ -34,34 +48,33 @@ Cross chain stablecoin swapping protocol with baked in compliance
 
 ## Gas Costs
 
-Measured with `forge test --match-contract GasBenchmark --gas-report` (Solc 0.8.24, optimizer 200 runs).
+Measured with `forge snapshot --match-contract GasBenchmark` (Solc 0.8.24, optimizer 200 runs).
 
 ### GauloiStaking
 
 | Operation | Gas |
 |-----------|-----|
-| stake | 105,999 |
-| requestUnstake | 74,127 |
-| completeUnstake | 56,683 |
+| stake | 102,874 |
+| requestUnstake | 154,772 |
+| completeUnstake | 147,304 |
 
 ### GauloiEscrow
 
 | Operation | Gas |
 |-----------|-----|
-| createIntent | 262,496 |
-| commitToIntent | 112,013 |
-| submitFill | 80,986 |
-| settle | 57,407 |
-| settleBatch (5) | 140,753 |
-| settleBatch (10) | 243,366 |
-| reclaimExpired | 67,915 |
+| executeOrder | 266,775 |
+| submitFill | 294,406 |
+| settle | 267,147 |
+| settleBatch (5) | 714,276 |
+| settleBatch (10) | 1,270,755 |
+| reclaimExpired | 241,787 |
 
 ### GauloiDisputes
 
 | Operation | Gas |
 |-----------|-----|
-| dispute | 210,876 |
-| resolveDispute (1 sig) | 145,298 |
-| finalizeExpiredDispute | 132,505 |
+| dispute | 780,981 |
+| resolveDispute (1 sig) | 799,226 |
+| finalizeExpiredDispute | 785,231 |
 
 Run `forge snapshot --match-contract GasBenchmark --diff` to check for regressions.

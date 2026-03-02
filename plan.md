@@ -74,13 +74,16 @@ Each chain gets its own deployment of all three contracts. No cross-chain messag
 ### State Machine
 
 ```
-Open ──→ Committed ──→ Filled ──→ Settled
- │            │            │
- └→ Expired   └→ Expired   └→ Disputed ──→ Settled (fill valid)
-    (reclaim)    (reclaim)                  └→ Refunded (fill invalid)
+[Off-chain: Taker signs EIP-712 order]
+         │
+         ▼
+    Committed ──→ Filled ──→ Settled
+         │            │
+         └→ Expired   └→ Disputed ──→ Settled (fill valid)
+            (reclaim)                  └→ Refunded (fill invalid)
 ```
 
-Committed + timeout = taker reclaims. No reopening.
+There is no on-chain `Open` state — the taker signs an order off-chain (0 gas). The maker calls `executeOrder` with the signed order, pulling tokens from the taker and creating the `Committed` state directly. Committed + timeout = taker reclaims. No reopening.
 
 ### Key Contract Functions
 
@@ -93,15 +96,14 @@ Committed + timeout = taker reclaims. No reopening.
 - `availableCapacity(maker)` → `uint256` — `stakedAmount - activeExposure`
 
 **GauloiEscrow.sol**
-- `createIntent(inputToken, inputAmount, outputToken, minOutputAmount, destChainId, destAddress, expiry)` → `bytes32 intentId`
-- `commitToIntent(intentId)` — staked maker reserves intent, starts commitment deadline
+- `executeOrder(Order calldata order, bytes calldata takerSignature)` → `bytes32 intentId` — maker executes a taker's EIP-712 signed order: verifies signature, pulls tokens from taker, writes Commitment (3 storage slots), starts commitment deadline
 - `submitFill(intentId, destTxHash)` — maker submits fill evidence, starts dispute window
-- `settle(intentId)` — anyone calls after dispute window, releases escrow to maker
-- `settleBatch(intentIds)` — batch settle, skips failures (try/catch internally)
-- `reclaimExpired(intentId)` — taker reclaims on expiry or commitment timeout
+- `settle(Order calldata order)` — anyone calls after dispute window, releases escrow to maker
+- `settleBatch(Order[] calldata orders)` — batch settle, skips failures (try/catch internally)
+- `reclaimExpired(Order calldata order)` — taker reclaims on commitment timeout
 
 **GauloiDisputes.sol**
-- `dispute(intentId)` — staked maker posts bond, pauses settlement
+- `dispute(Order calldata order)` — staked maker posts bond, stores order for later resolution, pauses settlement
 - `resolveDispute(intentId, fillValid, signatures)` — M/N EIP-712 attestations from staked makers
 - Bond: `max(fillAmount * 50bps, 25 USDC)`
 - Fill valid → disputer bond slashed. Fill invalid → maker's entire stake slashed, taker refunded.
@@ -114,7 +116,7 @@ intentId = keccak256(abi.encode(taker, inputToken, inputAmount, outputToken,
     minOutputAmount, destChainId, destAddress, expiry, nonce))
 ```
 
-Per-taker incrementing nonce stored in contract.
+Nonce is part of the signed order (random, chosen by taker off-chain). Replay protection: `_commitments[intentId].taker == address(0)` check prevents double execution. No on-chain nonce storage needed.
 
 ### Initial Parameters
 
@@ -150,13 +152,14 @@ Per-taker incrementing nonce stored in contract.
 - MockERC20 for USDC in tests
 
 ### Phase 2: Escrow Contract
-- `IntentLib.sol` — intent ID generation, state transition validation
-- `GauloiEscrow.sol` — full intent lifecycle (create, commit, fill, settle, batch settle, reclaim)
+- `IntentLib.sol` — intent ID generation via `computeIntentId(Order)`, `hashOrder` for EIP-712, `ORDER_TYPEHASH`
+- `SignatureLib.sol` — EIP-712 domain builder, `recoverOrderSigner` for taker signature verification
+- `GauloiEscrow.sol` — EIP-712 signed order flow: `executeOrder` (verifies taker sig, pulls tokens, writes 3-slot Commitment), `submitFill`, `settle(Order)`, `settleBatch(Order[])`, `reclaimExpired(Order)`
 - Token whitelist (only USDC/USDT for v0.1)
-- Calls Staking for exposure checks on commit, exposure release on settle/reclaim
+- Calls Staking for exposure checks on executeOrder, exposure release on settle/reclaim
 - `SafeERC20` for all transfers (USDT doesn't return bool)
 - `ReentrancyGuard` on all token-transferring functions
-- **Tests**: happy path, expiry, commitment timeout, batch settle, capacity enforcement, invalid state transitions
+- **Tests**: happy path, order expiry, commitment timeout, batch settle, capacity enforcement, signature verification, replay protection
 
 ### Phase 3: Disputes Contract
 - `SignatureLib.sol` — EIP-712 domain, FillAttestation type, signature recovery + threshold verification
@@ -188,7 +191,7 @@ Per-taker incrementing nonce stored in contract.
 - **Relay listener**: receive intents via WebSocket
 - **Compliance screener**: stub interface (allowlist/denylist JSON config), pluggable for Chainalysis/TRM later
 - **Quoter**: spread-based pricing (configurable bps per risk tier)
-- **Filler**: on quote acceptance → `commitToIntent()` → transfer on dest chain → `submitFill()`
+- **Filler**: on quote acceptance → `executeOrder(order, takerSignature)` → transfer on dest chain → `submitFill()`
 - **Settler**: periodic loop, `settleBatch()` for all matured intents
 - **Dispute watcher**: verify all `FillSubmitted` events against dest chain RPC, dispute if invalid, sign attestations
 
