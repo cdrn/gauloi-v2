@@ -19,6 +19,7 @@ interface CreateIntentOptions {
   destChain: string;
   destAddress: string;
   expiry: string;
+  sourceChain: string;
   rpc?: string;
   escrow?: string;
   privateKey?: string;
@@ -38,10 +39,16 @@ export async function createIntent(options: CreateIntentOptions): Promise<void> 
 
   const account = privateKeyToAccount(options.privateKey as `0x${string}`);
 
-  // Use chain ID 1 (Ethereum) as source by default
+  const sourceChainId = parseInt(options.sourceChain);
+  const sourceBase = SUPPORTED_CHAINS[sourceChainId];
+  if (!sourceBase) {
+    console.error(`Unsupported source chain: ${sourceChainId}. Supported: ${Object.keys(SUPPORTED_CHAINS).join(", ")}`);
+    process.exit(1);
+  }
+
   const sourceChainConfig = {
-    ...SUPPORTED_CHAINS[1]!,
-    rpcUrl: options.rpc,
+    ...sourceBase,
+    rpcUrl: options.rpc ?? sourceBase.rpcUrl,
   };
 
   if (options.escrow) {
@@ -165,7 +172,7 @@ export async function createIntent(options: CreateIntentOptions): Promise<void> 
           expiry: Number(expiry),
           nonce: nonce.toString(),
           takerSignature,
-          sourceChainId: 1,
+          sourceChainId,
         },
       }),
     );

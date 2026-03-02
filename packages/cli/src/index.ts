@@ -21,6 +21,7 @@ program
   .requiredOption("--dest-chain <chainId>", "Destination chain ID")
   .requiredOption("--dest-address <address>", "Destination address")
   .option("--expiry <seconds>", "Expiry in seconds from now", "3600")
+  .option("--source-chain <chainId>", "Source chain ID", "1")
   .option("--rpc <url>", "Source chain RPC URL", process.env.ETHEREUM_RPC_URL)
   .option("--escrow <address>", "Escrow contract address")
   .option("--private-key <key>", "Taker private key", process.env.PRIVATE_KEY)
