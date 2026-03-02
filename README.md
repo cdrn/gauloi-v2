@@ -3,16 +3,44 @@ Cross chain stablecoin swapping protocol with baked in compliance
 
 ## Architecture
 
-Gasless intent creation via EIP-712 signed orders. The taker signs an order off-chain (0 gas), and the maker calls `executeOrder` with the signed order to pull tokens and commit in a single transaction.
+Intent-based cross-chain settlement. Takers want to move stablecoins between chains. Makers fill those orders and earn a spread. The protocol escrows the taker's funds on the source chain until the maker proves they delivered on the destination chain.
+
+**Three contracts, deployed per chain:**
+
+- **GauloiStaking** — Makers stake USDC to participate. Stake gates participation, limits concurrent fill exposure, and backs dispute attestations. Fraudulent makers lose their entire stake.
+- **GauloiEscrow** — Holds taker funds during settlement. Handles the full order lifecycle: execute, fill, settle, reclaim.
+- **GauloiDisputes** — Any staked maker can challenge a fill claim by posting a bond. Resolution is M/N attestation signatures from the staked maker set — same security model as optimistic rollups (single honest challenger assumption).
+
+**Settlement flow:**
 
 ```
-[Off-chain: Taker signs EIP-712 order]
+Taker signs EIP-712 order off-chain (0 gas)
          |
          v
-    Committed --> Filled --> Settled
-         |            |
-         +-> Expired   +-> Disputed --> Settled (fill valid)
-            (reclaim)                   +-> Refunded (fill invalid)
+Maker calls executeOrder -----> Committed -----> Filled -----> Settled
+  (pulls taker tokens,              |                |
+   writes 3 storage slots)          |                +---> Disputed
+                                    |                        |
+                                    v                        +--> Settled (fill valid)
+                                 Expired                     +--> Refunded (fill invalid)
+                                 (taker reclaims)
+```
+
+The taker pays zero gas — they sign an [EIP-712](https://eips.ethereum.org/EIPS/eip-712) typed order off-chain. The maker calls `executeOrder` with the signed order, which verifies the signature, pulls tokens from the taker into escrow, and creates the commitment in a single transaction. Order parameters are never stored on-chain — the `Commitment` struct uses 3 storage slots instead of 9, and the `intentId` is recomputed from calldata wherever needed.
+
+**Compliance at the maker level.** Makers screen counterparties and price risk into their spread. The protocol doesn't enforce KYC — it provides the settlement infrastructure, and makers operate within their own regulatory framework.
+
+**Off-chain RFQ flow:**
+
+```
+Taker                    Relay                    Maker
+  |--- broadcast order --->|                        |
+  |                        |--- push to makers ---->|
+  |                        |<-- quote (spread) -----|
+  |<-- deliver quote ------|                        |
+  |--- accept quote ------>|                        |
+  |                        |--- notify winner ----->|
+  |                        |           executeOrder + fill on dest chain
 ```
 
 ## Testnet Deployments
