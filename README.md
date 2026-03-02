@@ -28,9 +28,28 @@ Maker calls executeOrder -----> Committed -----> Filled -----> Settled
 
 The taker pays zero gas — they sign an [EIP-712](https://eips.ethereum.org/EIPS/eip-712) typed order off-chain. The maker calls `executeOrder` with the signed order, which verifies the signature, pulls tokens from the taker into escrow, and creates the commitment in a single transaction. Order parameters are never stored on-chain — the `Commitment` struct uses 3 storage slots instead of 9, and the `intentId` is recomputed from calldata wherever needed.
 
+### Settlement lifecycle
+
+1. **Taker signs order** — EIP-712 typed data specifying input token/amount, desired output, destination chain/address, expiry, and a random nonce. Zero gas.
+2. **Maker executes order** — Calls `executeOrder` with the signed order. The contract verifies the taker's signature, pulls tokens from the taker into escrow, and records a `Commitment` (3 storage slots: taker+state, maker+deadlines, fillTxHash). The maker now has until the commitment deadline to deliver.
+3. **Maker fills on destination chain** — Sends the output token to the taker's destination address on chain B. This is a normal token transfer, no protocol contract needed on the destination.
+4. **Maker submits fill evidence** — Calls `submitFill` on chain A with the destination transaction hash. This starts the dispute window.
+5. **Dispute window passes** — If nobody challenges, anyone can call `settle` to release the escrowed tokens to the maker.
+6. **Taker reclaims on timeout** — If the maker fails to fill before the commitment deadline, the taker calls `reclaimExpired` to get their tokens back.
+
+### Economic incentives
+
+**Makers are honest because fraud costs more than it's worth.** A maker stakes USDC to participate, and their concurrent fill exposure is capped by their stake. Attempting a fraudulent fill (claiming delivery without actually sending tokens) risks their *entire* stake being slashed — not just the fill amount. A maker with 500k staked who tries to steal 100k on a single fill risks the full 500k. The expected value of fraud is `(1-P) * fill - P * stake`, where P (probability of getting caught) approaches 1 because verification is a single RPC call.
+
+**Challengers are incentivized to watch.** Any staked maker can dispute a fill claim by posting a bond. If the fill is fraudulent, the challenger gets rewarded from the slashed stake. Since checking a fill is trivial (does this tx hash exist with the right parameters on chain B?), staked makers can passively monitor every fill at negligible cost. You only need one honest watcher — same security assumption as optimistic rollups.
+
+**Dispute spam is unprofitable.** The dispute bond — `max(0.5% of fill, min bond)` — is forfeited if the fill turns out to be valid. Frivolous disputes cost the attacker real capital with no upside.
+
+**Attestors are the makers themselves.** Resolution uses M/N signatures from the staked maker set. No separate attestor class, no governance token. Makers already have the infrastructure (watching multiple chains), economic alignment (their own fills depend on system integrity), and capital at risk (incorrect attestation = slashing). Stablecoin fill verification is objectively binary — the transaction either exists with the right parameters or it doesn't.
+
 **Compliance at the maker level.** Makers screen counterparties and price risk into their spread. The protocol doesn't enforce KYC — it provides the settlement infrastructure, and makers operate within their own regulatory framework.
 
-**Off-chain RFQ flow:**
+### Off-chain RFQ flow
 
 ```
 Taker                    Relay                    Maker
