@@ -1,0 +1,275 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { useAccount, useReadContract } from "wagmi";
+import { erc20Abi, formatUnits, parseUnits } from "viem";
+import { SUPPORTED_CHAINS, SUPPORTED_TOKENS } from "@gauloi/common";
+import { ChainSelector } from "./ChainSelector";
+import { TokenSelector } from "./TokenSelector";
+import { QuoteList } from "./QuoteList";
+import { useTokenAllowance } from "@/hooks/useTokenAllowance";
+import { useSignOrder } from "@/hooks/useSignOrder";
+import { useRelay } from "@/hooks/useRelay";
+
+type SwapStep = "form" | "approving" | "signing" | "quoting" | "accepted";
+
+const RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL ?? "ws://127.0.0.1:8080";
+
+export function SwapForm() {
+  const { address, isConnected, chainId: walletChainId } = useAccount();
+
+  const [sourceChainId, setSourceChainId] = useState<number | null>(null);
+  const [destChainId, setDestChainId] = useState<number | null>(null);
+  const [token, setToken] = useState("USDC");
+  const [amount, setAmount] = useState("");
+  const [step, setStep] = useState<SwapStep>("form");
+  const [currentIntentId, setCurrentIntentId] = useState<string | null>(null);
+
+  const tokenInfo = SUPPORTED_TOKENS[token];
+  const sourceChain = sourceChainId ? SUPPORTED_CHAINS[sourceChainId] : null;
+  const destChain = destChainId ? SUPPORTED_CHAINS[destChainId] : null;
+
+  const inputToken = tokenInfo?.addresses[sourceChainId ?? 0] as `0x${string}` | undefined;
+  const outputToken = tokenInfo?.addresses[destChainId ?? 0] as `0x${string}` | undefined;
+
+  const parsedAmount = amount
+    ? parseUnits(amount, tokenInfo?.decimals ?? 6)
+    : 0n;
+
+  // Min output: input minus 100 bps (1%) as default slippage tolerance
+  const minOutput = (parsedAmount * 9900n) / 10000n;
+
+  // Read user's token balance
+  const { data: balance } = useReadContract({
+    address: inputToken,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: address ? [address] : undefined,
+    query: { enabled: !!inputToken && !!address },
+  });
+
+  // Allowance hook
+  const {
+    allowance,
+    approve,
+    isApproving,
+    isConfirmed: approvalConfirmed,
+    refetch: refetchAllowance,
+  } = useTokenAllowance(inputToken, address, sourceChain?.escrowAddress);
+
+  // Sign hook
+  const { sign, isPending: isSigning } = useSignOrder();
+
+  // Relay hook
+  const relay = useRelay({ url: RELAY_URL, enabled: step === "quoting" || step === "accepted" });
+
+  // After approval confirms, proceed to signing
+  useEffect(() => {
+    if (approvalConfirmed && step === "approving") {
+      refetchAllowance();
+      handleSign();
+    }
+  }, [approvalConfirmed]);
+
+  const needsApproval = parsedAmount > 0n && allowance < parsedAmount;
+
+  const handleSwap = async () => {
+    if (needsApproval) {
+      setStep("approving");
+      approve(parsedAmount);
+    } else {
+      await handleSign();
+    }
+  };
+
+  const handleSign = async () => {
+    if (!address || !sourceChain || !destChain || !inputToken || !outputToken) return;
+    setStep("signing");
+
+    try {
+      const result = await sign({
+        taker: address,
+        inputToken,
+        inputAmount: parsedAmount,
+        outputToken,
+        minOutputAmount: minOutput,
+        destinationChainId: destChain.chainId,
+        destinationAddress: address,
+        expirySeconds: 600,
+        escrowAddress: sourceChain.escrowAddress,
+        chainId: sourceChain.chainId,
+      });
+
+      setCurrentIntentId(result.intentId);
+      setStep("quoting");
+
+      // Broadcast to relay
+      relay.broadcast(result.intentId, result.order, result.signature, sourceChain.chainId);
+
+      // Store in localStorage for activity page
+      const stored = JSON.parse(localStorage.getItem("gauloi_intents") ?? "[]");
+      stored.unshift({
+        intentId: result.intentId,
+        inputAmount: parsedAmount.toString(),
+        sourceChainId: sourceChain.chainId,
+        destChainId: destChain.chainId,
+        timestamp: Date.now(),
+      });
+      localStorage.setItem("gauloi_intents", JSON.stringify(stored.slice(0, 50)));
+    } catch (err) {
+      console.error("Signing failed:", err);
+      setStep("form");
+    }
+  };
+
+  const handleSelectQuote = (maker: string) => {
+    if (!currentIntentId) return;
+    relay.selectQuote(currentIntentId, maker);
+    setStep("accepted");
+  };
+
+  // Auto-select best quote after 5s
+  useEffect(() => {
+    if (step !== "quoting" || relay.quotes.length === 0) return;
+
+    const timer = setTimeout(() => {
+      const best = [...relay.quotes].sort(
+        (a, b) => Number(BigInt(b.outputAmount) - BigInt(a.outputAmount)),
+      )[0];
+      if (best) handleSelectQuote(best.maker);
+    }, 5000);
+
+    return () => clearTimeout(timer);
+  }, [step, relay.quotes]);
+
+  const formattedBalance = balance !== undefined && tokenInfo
+    ? formatUnits(balance, tokenInfo.decimals)
+    : null;
+
+  const canSwap =
+    isConnected &&
+    sourceChainId &&
+    destChainId &&
+    inputToken &&
+    outputToken &&
+    parsedAmount > 0n &&
+    step === "form";
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4">
+      <h2 className="text-lg font-semibold">Swap</h2>
+
+      {/* Source chain */}
+      <ChainSelector
+        label="From"
+        value={sourceChainId}
+        onChange={setSourceChainId}
+        exclude={destChainId}
+      />
+
+      {/* Input amount + token */}
+      <div className="bg-gray-800 rounded-xl p-4">
+        <div className="flex justify-between items-center mb-2">
+          <label className="text-xs text-gray-500">You send</label>
+          {formattedBalance !== null && (
+            <button
+              onClick={() => setAmount(formattedBalance)}
+              className="text-xs text-gray-500 hover:text-white"
+            >
+              Balance: {Number(formattedBalance).toLocaleString()}
+            </button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="number"
+            placeholder="0.00"
+            value={amount}
+            onChange={(e) => {
+              setAmount(e.target.value);
+              setStep("form");
+            }}
+            className="flex-1 bg-transparent text-2xl font-medium outline-none placeholder-gray-600 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+          />
+          <TokenSelector value={token} onChange={setToken} />
+        </div>
+      </div>
+
+      {/* Arrow */}
+      <div className="flex justify-center -my-2">
+        <div className="bg-gray-800 border border-gray-700 rounded-lg p-1.5">
+          <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+          </svg>
+        </div>
+      </div>
+
+      {/* Dest chain */}
+      <ChainSelector
+        label="To"
+        value={destChainId}
+        onChange={setDestChainId}
+        exclude={sourceChainId}
+      />
+
+      {/* Output preview */}
+      {parsedAmount > 0n && (
+        <div className="bg-gray-800 rounded-xl p-4">
+          <label className="text-xs text-gray-500 block mb-2">You receive (minimum)</label>
+          <p className="text-2xl font-medium">
+            {formatUnits(minOutput, tokenInfo?.decimals ?? 6)} {token}
+          </p>
+          <p className="text-xs text-gray-500 mt-1">1% max slippage</p>
+        </div>
+      )}
+
+      {/* Quotes */}
+      {step === "quoting" && (
+        <QuoteList
+          quotes={relay.quotes}
+          inputAmount={parsedAmount}
+          decimals={tokenInfo?.decimals ?? 6}
+          onSelect={handleSelectQuote}
+        />
+      )}
+
+      {step === "accepted" && (
+        <div className="bg-green-900/30 border border-green-800 rounded-xl p-4 text-center">
+          <p className="text-green-300 text-sm font-medium">Quote accepted</p>
+          <p className="text-xs text-gray-400 mt-1">
+            Maker is executing your order. Track progress in Activity.
+          </p>
+        </div>
+      )}
+
+      {/* Action button */}
+      {!isConnected ? (
+        <div className="text-center text-sm text-gray-500 py-2">
+          Connect your wallet to swap
+        </div>
+      ) : (
+        <button
+          onClick={handleSwap}
+          disabled={!canSwap}
+          className="w-full bg-white text-black font-medium py-3 rounded-xl hover:bg-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {step === "approving"
+            ? "Approving..."
+            : step === "signing"
+              ? "Sign order in wallet..."
+              : step === "quoting"
+                ? "Waiting for quotes..."
+                : step === "accepted"
+                  ? "Done"
+                  : needsApproval
+                    ? `Approve ${token}`
+                    : "Swap"}
+        </button>
+      )}
+
+      {relay.error && (
+        <p className="text-xs text-red-400 text-center">{relay.error}</p>
+      )}
+    </div>
+  );
+}

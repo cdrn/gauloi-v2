@@ -1,0 +1,29 @@
+{
+  "name": "@gauloi/app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@gauloi/common": "workspace:*",
+    "@rainbow-me/rainbowkit": "^2.2.10",
+    "@tanstack/react-query": "^5.90.21",
+    "next": "^14",
+    "react": "^18",
+    "react-dom": "^18",
+    "viem": "^2.21.0",
+    "wagmi": "^2"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.1",
+    "@types/node": "^25.3.3",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "postcss": "^8.5.8",
+    "tailwindcss": "^4.2.1",
+    "typescript": "^5.6.0"
+  }
+}
