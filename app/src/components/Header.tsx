@@ -18,24 +18,24 @@ function PixelConnectButton() {
             })}
           >
             {!connected ? (
-              <button onClick={openConnectModal} className="pixel-btn text-[8px] py-2 px-4">
+              <button onClick={openConnectModal} className="pixel-btn text-[10px] py-3 px-6">
                 CONNECT
               </button>
             ) : chain.unsupported ? (
-              <button onClick={openChainModal} className="pixel-btn-amber text-[8px] py-2 px-4">
+              <button onClick={openChainModal} className="pixel-btn-amber text-[10px] py-3 px-6">
                 WRONG NETWORK
               </button>
             ) : (
               <div className="flex items-center gap-2">
                 <button
                   onClick={openChainModal}
-                  className="font-pixel text-[7px] text-teal-600 hover:text-teal-400 border-2 border-navy-600 hover:border-teal-600 px-2 py-1.5 bg-navy-800 transition-colors"
+                  className="font-pixel text-[8px] text-teal-600 hover:text-teal-400 border-2 border-navy-600 hover:border-teal-600 px-3 py-2 bg-navy-800 transition-colors"
                 >
                   {chain.name?.toUpperCase() ?? "CHAIN"}
                 </button>
                 <button
                   onClick={openAccountModal}
-                  className="font-pixel text-[8px] text-pixel-cyan border-2 border-teal-600 px-3 py-1.5 bg-navy-800 hover:bg-navy-700 transition-colors"
+                  className="font-pixel text-[10px] text-pixel-cyan border-2 border-teal-600 px-4 py-2 bg-navy-800 hover:bg-navy-700 transition-colors"
                   style={{ boxShadow: "2px 2px 0px #009a7a" }}
                 >
                   {account.displayName}
