@@ -15,14 +15,31 @@ type SwapStep = "form" | "approving" | "signing" | "quoting" | "accepted";
 
 const RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL ?? "ws://127.0.0.1:8080";
 
-export function SwapForm() {
+export interface SwapInitialParams {
+  destChainId?: number;
+  token?: string;
+  amount?: string;
+  recipient?: `0x${string}`;
+}
+
+interface SwapFormProps {
+  initialParams?: SwapInitialParams;
+}
+
+function truncateAddress(addr: string): string {
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+}
+
+export function SwapForm({ initialParams }: SwapFormProps) {
   const { address, isConnected, chainId: walletChainId } = useAccount();
   const { switchChain } = useSwitchChain();
 
+  const isPaymentRequest = !!initialParams?.recipient;
+
   const [sourceChainId, setSourceChainId] = useState<number | null>(null);
-  const [destChainId, setDestChainId] = useState<number | null>(null);
-  const [token, setToken] = useState("USDC");
-  const [amount, setAmount] = useState("");
+  const [destChainId, setDestChainId] = useState<number | null>(initialParams?.destChainId ?? null);
+  const [token, setToken] = useState(initialParams?.token ?? "USDC");
+  const [amount, setAmount] = useState(initialParams?.amount ?? "");
   const [step, setStep] = useState<SwapStep>("form");
   const [currentIntentId, setCurrentIntentId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -40,6 +57,9 @@ export function SwapForm() {
 
   // Min output: input minus 100 bps (1%) as default slippage tolerance
   const minOutput = (parsedAmount * 9900n) / 10000n;
+
+  // The address that receives funds on the dest chain
+  const destinationAddress = initialParams?.recipient ?? address;
 
   // Auto-set source chain from wallet
   useEffect(() => {
@@ -76,7 +96,7 @@ export function SwapForm() {
   const relay = useRelay({ url: RELAY_URL, enabled: step === "quoting" || step === "accepted" });
 
   const handleSign = useCallback(async () => {
-    if (!address || !sourceChain || !destChain || !inputToken || !outputToken) return;
+    if (!address || !sourceChain || !destChain || !inputToken || !outputToken || !destinationAddress) return;
     setStep("signing");
     setErrorMsg(null);
 
@@ -88,7 +108,7 @@ export function SwapForm() {
         outputToken,
         minOutputAmount: minOutput,
         destinationChainId: destChain.chainId,
-        destinationAddress: address,
+        destinationAddress: destinationAddress,
         expirySeconds: 600,
         escrowAddress: sourceChain.escrowAddress,
         chainId: sourceChain.chainId,
@@ -119,7 +139,7 @@ export function SwapForm() {
       }
       setStep("form");
     }
-  }, [address, sourceChain, destChain, inputToken, outputToken, parsedAmount, minOutput, sign, relay]);
+  }, [address, sourceChain, destChain, inputToken, outputToken, destinationAddress, parsedAmount, minOutput, sign, relay]);
 
   // After approval confirms, proceed to signing
   useEffect(() => {
@@ -149,7 +169,7 @@ export function SwapForm() {
 
   const handleReset = () => {
     setStep("form");
-    setAmount("");
+    setAmount(initialParams?.amount ?? "");
     setCurrentIntentId(null);
     setErrorMsg(null);
   };
@@ -188,7 +208,9 @@ export function SwapForm() {
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4">
       <div className="flex justify-between items-center">
-        <h2 className="text-lg font-semibold">Swap</h2>
+        <h2 className="text-lg font-semibold">
+          {isPaymentRequest ? "Payment Request" : "Swap"}
+        </h2>
         {relay.connected && step === "quoting" && (
           <span className="text-xs text-green-400 flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block" />
@@ -196,6 +218,17 @@ export function SwapForm() {
           </span>
         )}
       </div>
+
+      {/* Payment request banner */}
+      {isPaymentRequest && destChain && (
+        <div className="bg-blue-900/30 border border-blue-800 rounded-xl p-3">
+          <p className="text-sm text-blue-300">
+            Send <span className="font-medium">{amount} {token}</span> to{" "}
+            <span className="font-mono text-xs">{truncateAddress(initialParams!.recipient!)}</span>{" "}
+            on {destChain.name}
+          </p>
+        </div>
+      )}
 
       {/* Source chain */}
       <ChainSelector
@@ -228,9 +261,16 @@ export function SwapForm() {
               setStep("form");
               setErrorMsg(null);
             }}
-            className="flex-1 bg-transparent text-2xl font-medium outline-none placeholder-gray-600 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+            readOnly={isPaymentRequest}
+            className={`flex-1 bg-transparent text-2xl font-medium outline-none placeholder-gray-600 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${isPaymentRequest ? "text-gray-400" : ""}`}
           />
-          <TokenSelector value={token} onChange={setToken} />
+          {isPaymentRequest ? (
+            <span className="bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm font-medium">
+              {token}
+            </span>
+          ) : (
+            <TokenSelector value={token} onChange={setToken} />
+          )}
         </div>
         {insufficientBalance && (
           <p className="text-xs text-red-400 mt-2">Insufficient balance</p>
@@ -247,17 +287,38 @@ export function SwapForm() {
       </div>
 
       {/* Dest chain */}
-      <ChainSelector
-        label="To"
-        value={destChainId}
-        onChange={setDestChainId}
-        exclude={sourceChainId}
-      />
+      {isPaymentRequest ? (
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">To</label>
+          <div className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-400">
+            {destChain?.name ?? "Unknown chain"}
+          </div>
+        </div>
+      ) : (
+        <ChainSelector
+          label="To"
+          value={destChainId}
+          onChange={setDestChainId}
+          exclude={sourceChainId}
+        />
+      )}
+
+      {/* Recipient display for payment requests */}
+      {isPaymentRequest && (
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Recipient</label>
+          <div className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm font-mono text-gray-400">
+            {initialParams!.recipient}
+          </div>
+        </div>
+      )}
 
       {/* Output preview */}
       {parsedAmount > 0n && step === "form" && (
         <div className="bg-gray-800 rounded-xl p-4">
-          <label className="text-xs text-gray-500 block mb-2">You receive (minimum)</label>
+          <label className="text-xs text-gray-500 block mb-2">
+            {isPaymentRequest ? "Recipient gets (minimum)" : "You receive (minimum)"}
+          </label>
           <p className="text-2xl font-medium">
             {formatUnits(minOutput, tokenInfo?.decimals ?? 6)} {token}
           </p>
@@ -279,7 +340,9 @@ export function SwapForm() {
         <div className="bg-green-900/30 border border-green-800 rounded-xl p-4 text-center">
           <p className="text-green-300 text-sm font-medium">Quote accepted</p>
           <p className="text-xs text-gray-400 mt-1">
-            Maker is executing your order. Track progress in Activity.
+            {isPaymentRequest
+              ? "Maker is executing the payment. Track progress in Activity."
+              : "Maker is executing your order. Track progress in Activity."}
           </p>
         </div>
       )}
@@ -294,14 +357,14 @@ export function SwapForm() {
         </button>
       ) : !isConnected ? (
         <div className="text-center text-sm text-gray-500 py-2">
-          Connect your wallet to swap
+          Connect your wallet to {isPaymentRequest ? "pay" : "swap"}
         </div>
       ) : step === "accepted" ? (
         <button
           onClick={handleReset}
           className="w-full bg-gray-800 text-white font-medium py-3 rounded-xl hover:bg-gray-700 transition-colors"
         >
-          New Swap
+          {isPaymentRequest ? "Done" : "New Swap"}
         </button>
       ) : (
         <button
@@ -319,7 +382,9 @@ export function SwapForm() {
                   ? "Insufficient balance"
                   : needsApproval
                     ? `Approve ${token}`
-                    : "Swap"}
+                    : isPaymentRequest
+                      ? `Pay ${amount} ${token}`
+                      : "Swap"}
         </button>
       )}
 

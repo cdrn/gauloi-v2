@@ -23,6 +23,14 @@ export function Header() {
             Swap
           </Link>
           <Link
+            href="/request"
+            className={`transition-colors ${
+              pathname === "/request" ? "text-white" : "text-gray-400 hover:text-white"
+            }`}
+          >
+            Request
+          </Link>
+          <Link
             href="/activity"
             className={`transition-colors ${
               pathname === "/activity" ? "text-white" : "text-gray-400 hover:text-white"

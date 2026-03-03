@@ -12,6 +12,7 @@
     "@rainbow-me/rainbowkit": "^2.2.10",
     "@tanstack/react-query": "^5.90.21",
     "next": "^14",
+    "qrcode.react": "^4.2.0",
     "react": "^18",
     "react-dom": "^18",
     "viem": "^2.21.0",
