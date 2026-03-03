@@ -34,7 +34,7 @@ const config: Config = {
         mono: ['"IBM Plex Mono"', "monospace"],
       },
       animation: {
-        marquee: "marquee 20s linear infinite",
+        marquee: "marquee 80s linear infinite",
         "marquee-reverse": "marquee-reverse 25s linear infinite",
       },
       keyframes: {
