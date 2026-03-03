@@ -57,7 +57,7 @@ export function Header() {
     return (
       <Link
         href={href}
-        className={`font-pixel text-[10px] uppercase tracking-wider px-3 py-1 border-2 transition-colors ${
+        className={`font-pixel text-xs uppercase tracking-wider px-4 py-2 border-2 transition-colors ${
           active
             ? "border-teal-400 text-teal-400 bg-navy-700"
             : "border-transparent text-teal-600 hover:text-teal-400 hover:border-navy-600"
@@ -69,12 +69,12 @@ export function Header() {
   };
 
   return (
-    <header className="border-b-2 border-navy-600 px-6 py-4 flex items-center justify-between bg-navy-900">
-      <div className="flex items-center gap-6">
-        <Link href="/" className="font-pixel text-sm text-pixel-cyan tracking-wider">
+    <header className="border-b-2 border-navy-600 px-6 py-5 flex items-center justify-between bg-navy-900">
+      <div className="flex items-center gap-8">
+        <Link href="/" className="font-pixel text-lg text-pixel-cyan tracking-wider">
           GAULOI
         </Link>
-        <nav className="flex gap-1">
+        <nav className="flex gap-2">
           {navLink("/", "Swap")}
           {navLink("/request", "Request")}
           {navLink("/activity", "Activity")}
