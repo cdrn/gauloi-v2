@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useAccount, useReadContract } from "wagmi";
+import { useState, useEffect, useCallback } from "react";
+import { useAccount, useReadContract, useSwitchChain } from "wagmi";
 import { erc20Abi, formatUnits, parseUnits } from "viem";
 import { SUPPORTED_CHAINS, SUPPORTED_TOKENS } from "@gauloi/common";
 import { ChainSelector } from "./ChainSelector";
@@ -17,6 +17,7 @@ const RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL ?? "ws://127.0.0.1:8080";
 
 export function SwapForm() {
   const { address, isConnected, chainId: walletChainId } = useAccount();
+  const { switchChain } = useSwitchChain();
 
   const [sourceChainId, setSourceChainId] = useState<number | null>(null);
   const [destChainId, setDestChainId] = useState<number | null>(null);
@@ -24,6 +25,7 @@ export function SwapForm() {
   const [amount, setAmount] = useState("");
   const [step, setStep] = useState<SwapStep>("form");
   const [currentIntentId, setCurrentIntentId] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const tokenInfo = SUPPORTED_TOKENS[token];
   const sourceChain = sourceChainId ? SUPPORTED_CHAINS[sourceChainId] : null;
@@ -39,13 +41,23 @@ export function SwapForm() {
   // Min output: input minus 100 bps (1%) as default slippage tolerance
   const minOutput = (parsedAmount * 9900n) / 10000n;
 
+  // Auto-set source chain from wallet
+  useEffect(() => {
+    if (walletChainId && !sourceChainId && SUPPORTED_CHAINS[walletChainId]) {
+      setSourceChainId(walletChainId);
+    }
+  }, [walletChainId, sourceChainId]);
+
+  // Network mismatch detection
+  const networkMismatch = isConnected && sourceChainId && walletChainId !== sourceChainId;
+
   // Read user's token balance
   const { data: balance } = useReadContract({
     address: inputToken,
     abi: erc20Abi,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
-    query: { enabled: !!inputToken && !!address },
+    query: { enabled: !!inputToken && !!address && !networkMismatch },
   });
 
   // Allowance hook
@@ -63,28 +75,10 @@ export function SwapForm() {
   // Relay hook
   const relay = useRelay({ url: RELAY_URL, enabled: step === "quoting" || step === "accepted" });
 
-  // After approval confirms, proceed to signing
-  useEffect(() => {
-    if (approvalConfirmed && step === "approving") {
-      refetchAllowance();
-      handleSign();
-    }
-  }, [approvalConfirmed]);
-
-  const needsApproval = parsedAmount > 0n && allowance < parsedAmount;
-
-  const handleSwap = async () => {
-    if (needsApproval) {
-      setStep("approving");
-      approve(parsedAmount);
-    } else {
-      await handleSign();
-    }
-  };
-
-  const handleSign = async () => {
+  const handleSign = useCallback(async () => {
     if (!address || !sourceChain || !destChain || !inputToken || !outputToken) return;
     setStep("signing");
+    setErrorMsg(null);
 
     try {
       const result = await sign({
@@ -117,8 +111,33 @@ export function SwapForm() {
       });
       localStorage.setItem("gauloi_intents", JSON.stringify(stored.slice(0, 50)));
     } catch (err) {
-      console.error("Signing failed:", err);
+      const message = err instanceof Error ? err.message : "Signing failed";
+      if (message.includes("User rejected")) {
+        setErrorMsg("Transaction rejected in wallet");
+      } else {
+        setErrorMsg(message);
+      }
       setStep("form");
+    }
+  }, [address, sourceChain, destChain, inputToken, outputToken, parsedAmount, minOutput, sign, relay]);
+
+  // After approval confirms, proceed to signing
+  useEffect(() => {
+    if (approvalConfirmed && step === "approving") {
+      refetchAllowance();
+      handleSign();
+    }
+  }, [approvalConfirmed, step, refetchAllowance, handleSign]);
+
+  const needsApproval = parsedAmount > 0n && allowance < parsedAmount;
+
+  const handleSwap = async () => {
+    setErrorMsg(null);
+    if (needsApproval) {
+      setStep("approving");
+      approve(parsedAmount);
+    } else {
+      await handleSign();
     }
   };
 
@@ -126,6 +145,13 @@ export function SwapForm() {
     if (!currentIntentId) return;
     relay.selectQuote(currentIntentId, maker);
     setStep("accepted");
+  };
+
+  const handleReset = () => {
+    setStep("form");
+    setAmount("");
+    setCurrentIntentId(null);
+    setErrorMsg(null);
   };
 
   // Auto-select best quote after 5s
@@ -146,6 +172,8 @@ export function SwapForm() {
     ? formatUnits(balance, tokenInfo.decimals)
     : null;
 
+  const insufficientBalance = balance !== undefined && parsedAmount > 0n && parsedAmount > balance;
+
   const canSwap =
     isConnected &&
     sourceChainId &&
@@ -153,11 +181,21 @@ export function SwapForm() {
     inputToken &&
     outputToken &&
     parsedAmount > 0n &&
+    !insufficientBalance &&
+    !networkMismatch &&
     step === "form";
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4">
-      <h2 className="text-lg font-semibold">Swap</h2>
+      <div className="flex justify-between items-center">
+        <h2 className="text-lg font-semibold">Swap</h2>
+        {relay.connected && step === "quoting" && (
+          <span className="text-xs text-green-400 flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block" />
+            Relay connected
+          </span>
+        )}
+      </div>
 
       {/* Source chain */}
       <ChainSelector
@@ -188,11 +226,15 @@ export function SwapForm() {
             onChange={(e) => {
               setAmount(e.target.value);
               setStep("form");
+              setErrorMsg(null);
             }}
             className="flex-1 bg-transparent text-2xl font-medium outline-none placeholder-gray-600 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
           />
           <TokenSelector value={token} onChange={setToken} />
         </div>
+        {insufficientBalance && (
+          <p className="text-xs text-red-400 mt-2">Insufficient balance</p>
+        )}
       </div>
 
       {/* Arrow */}
@@ -213,7 +255,7 @@ export function SwapForm() {
       />
 
       {/* Output preview */}
-      {parsedAmount > 0n && (
+      {parsedAmount > 0n && step === "form" && (
         <div className="bg-gray-800 rounded-xl p-4">
           <label className="text-xs text-gray-500 block mb-2">You receive (minimum)</label>
           <p className="text-2xl font-medium">
@@ -242,11 +284,25 @@ export function SwapForm() {
         </div>
       )}
 
-      {/* Action button */}
-      {!isConnected ? (
+      {/* Network switch prompt */}
+      {networkMismatch && sourceChain ? (
+        <button
+          onClick={() => switchChain({ chainId: sourceChainId! })}
+          className="w-full bg-yellow-600 text-white font-medium py-3 rounded-xl hover:bg-yellow-500 transition-colors"
+        >
+          Switch to {sourceChain.name}
+        </button>
+      ) : !isConnected ? (
         <div className="text-center text-sm text-gray-500 py-2">
           Connect your wallet to swap
         </div>
+      ) : step === "accepted" ? (
+        <button
+          onClick={handleReset}
+          className="w-full bg-gray-800 text-white font-medium py-3 rounded-xl hover:bg-gray-700 transition-colors"
+        >
+          New Swap
+        </button>
       ) : (
         <button
           onClick={handleSwap}
@@ -259,16 +315,19 @@ export function SwapForm() {
               ? "Sign order in wallet..."
               : step === "quoting"
                 ? "Waiting for quotes..."
-                : step === "accepted"
-                  ? "Done"
+                : insufficientBalance
+                  ? "Insufficient balance"
                   : needsApproval
                     ? `Approve ${token}`
                     : "Swap"}
         </button>
       )}
 
-      {relay.error && (
-        <p className="text-xs text-red-400 text-center">{relay.error}</p>
+      {/* Error display */}
+      {(errorMsg || relay.error) && (
+        <p className="text-xs text-red-400 text-center">
+          {errorMsg || relay.error}
+        </p>
       )}
     </div>
   );
