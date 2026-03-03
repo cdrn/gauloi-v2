@@ -28,13 +28,19 @@ export function useIntentStatus(
     return { state: null, label: "Loading...", commitment: null, isLoading };
   }
 
-  const [taker, state, maker, commitmentDeadline, disputeWindowEnd, fillTxHash] =
-    data as [string, number, string, number, number, string];
+  const commitment = data as unknown as {
+    taker: string;
+    state: number;
+    maker: string;
+    commitmentDeadline: number;
+    disputeWindowEnd: number;
+    fillTxHash: string;
+  };
 
   return {
-    state: state as IntentState,
-    label: STATE_LABELS[state] ?? "Unknown",
-    commitment: { taker, state, maker, commitmentDeadline, disputeWindowEnd, fillTxHash },
+    state: commitment.state as IntentState,
+    label: STATE_LABELS[commitment.state] ?? "Unknown",
+    commitment,
     isLoading,
   };
 }
