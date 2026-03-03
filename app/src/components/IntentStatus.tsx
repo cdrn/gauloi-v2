@@ -11,12 +11,12 @@ interface IntentStatusProps {
   timestamp: number;
 }
 
-const STATE_COLORS: Record<number, string> = {
-  [IntentState.Committed]: "bg-yellow-900 text-yellow-300",
-  [IntentState.Filled]: "bg-blue-900 text-blue-300",
-  [IntentState.Settled]: "bg-green-900 text-green-300",
-  [IntentState.Disputed]: "bg-red-900 text-red-300",
-  [IntentState.Expired]: "bg-gray-800 text-gray-400",
+const STATE_STYLES: Record<number, string> = {
+  [IntentState.Committed]: "border-amber-400 text-amber-400",
+  [IntentState.Filled]: "border-pixel-cyan text-pixel-cyan",
+  [IntentState.Settled]: "border-pixel-green text-pixel-green",
+  [IntentState.Disputed]: "border-pixel-red text-pixel-red",
+  [IntentState.Expired]: "border-navy-600 text-teal-600",
 };
 
 export function IntentStatus({
@@ -34,26 +34,26 @@ export function IntentStatus({
   const amount = (Number(inputAmount) / 1e6).toFixed(2);
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+    <div className="bg-navy-800 border-2 border-navy-600 p-4">
       <div className="flex justify-between items-start">
         <div>
-          <p className="text-sm font-medium">{amount} USDC</p>
-          <p className="text-xs text-gray-500 mt-1">
+          <p className="font-pixel text-[10px] text-pixel-cyan">{amount} USDC</p>
+          <p className="text-xs text-teal-600 mt-2 font-mono">
             {sourceName} &rarr; {destName}
           </p>
-          <p className="text-xs text-gray-600 mt-1 font-mono">
+          <p className="text-[10px] text-navy-600 mt-1 font-mono">
             {intentId.slice(0, 10)}...{intentId.slice(-8)}
           </p>
         </div>
-        <div className="flex flex-col items-end gap-1">
+        <div className="flex flex-col items-end gap-2">
           <span
-            className={`text-xs px-2 py-0.5 rounded-full ${
-              state !== null ? STATE_COLORS[state] ?? "bg-gray-800 text-gray-400" : "bg-gray-800 text-gray-500"
+            className={`font-pixel text-[8px] px-2 py-1 border-2 uppercase ${
+              state !== null ? STATE_STYLES[state] ?? "border-navy-600 text-teal-600" : "border-navy-600 text-teal-600"
             }`}
           >
             {isLoading ? "..." : label}
           </span>
-          <span className="text-xs text-gray-600">
+          <span className="text-[10px] text-navy-600 font-mono">
             {new Date(timestamp).toLocaleTimeString()}
           </span>
         </div>

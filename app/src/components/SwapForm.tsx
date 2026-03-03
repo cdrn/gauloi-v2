@@ -55,23 +55,17 @@ export function SwapForm({ initialParams }: SwapFormProps) {
     ? parseUnits(amount, tokenInfo?.decimals ?? 6)
     : 0n;
 
-  // Min output: input minus 100 bps (1%) as default slippage tolerance
   const minOutput = (parsedAmount * 9900n) / 10000n;
-
-  // The address that receives funds on the dest chain
   const destinationAddress = initialParams?.recipient ?? address;
 
-  // Auto-set source chain from wallet
   useEffect(() => {
     if (walletChainId && !sourceChainId && SUPPORTED_CHAINS[walletChainId]) {
       setSourceChainId(walletChainId);
     }
   }, [walletChainId, sourceChainId]);
 
-  // Network mismatch detection
   const networkMismatch = isConnected && sourceChainId && walletChainId !== sourceChainId;
 
-  // Read user's token balance
   const { data: balance } = useReadContract({
     address: inputToken,
     abi: erc20Abi,
@@ -80,7 +74,6 @@ export function SwapForm({ initialParams }: SwapFormProps) {
     query: { enabled: !!inputToken && !!address && !networkMismatch },
   });
 
-  // Allowance hook
   const {
     allowance,
     approve,
@@ -89,10 +82,7 @@ export function SwapForm({ initialParams }: SwapFormProps) {
     refetch: refetchAllowance,
   } = useTokenAllowance(inputToken, address, sourceChain?.escrowAddress);
 
-  // Sign hook
   const { sign, isPending: isSigning } = useSignOrder();
-
-  // Relay hook
   const relay = useRelay({ url: RELAY_URL, enabled: step === "quoting" || step === "accepted" });
 
   const handleSign = useCallback(async () => {
@@ -116,11 +106,8 @@ export function SwapForm({ initialParams }: SwapFormProps) {
 
       setCurrentIntentId(result.intentId);
       setStep("quoting");
-
-      // Broadcast to relay
       relay.broadcast(result.intentId, result.order, result.signature, sourceChain.chainId);
 
-      // Store in localStorage for activity page
       const stored = JSON.parse(localStorage.getItem("gauloi_intents") ?? "[]");
       stored.unshift({
         intentId: result.intentId,
@@ -141,7 +128,6 @@ export function SwapForm({ initialParams }: SwapFormProps) {
     }
   }, [address, sourceChain, destChain, inputToken, outputToken, destinationAddress, parsedAmount, minOutput, sign, relay]);
 
-  // After approval confirms, proceed to signing
   useEffect(() => {
     if (approvalConfirmed && step === "approving") {
       refetchAllowance();
@@ -174,17 +160,14 @@ export function SwapForm({ initialParams }: SwapFormProps) {
     setErrorMsg(null);
   };
 
-  // Auto-select best quote after 5s
   useEffect(() => {
     if (step !== "quoting" || relay.quotes.length === 0) return;
-
     const timer = setTimeout(() => {
       const best = [...relay.quotes].sort(
         (a, b) => Number(BigInt(b.outputAmount) - BigInt(a.outputAmount)),
       )[0];
       if (best) handleSelectQuote(best.maker);
     }, 5000);
-
     return () => clearTimeout(timer);
   }, [step, relay.quotes]);
 
@@ -206,26 +189,27 @@ export function SwapForm({ initialParams }: SwapFormProps) {
     step === "form";
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4">
+    <div className="pixel-border bg-navy-900 p-6 space-y-4">
+      {/* Header */}
       <div className="flex justify-between items-center">
-        <h2 className="text-lg font-semibold">
-          {isPaymentRequest ? "Payment Request" : "Swap"}
+        <h2 className="font-pixel text-sm text-pixel-cyan">
+          {isPaymentRequest ? "PAY" : "SWAP"}
         </h2>
         {relay.connected && step === "quoting" && (
-          <span className="text-xs text-green-400 flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block" />
-            Relay connected
+          <span className="font-pixel text-[8px] text-pixel-green flex items-center gap-2">
+            <span className="w-2 h-2 bg-pixel-green inline-block" />
+            RELAY OK
           </span>
         )}
       </div>
 
       {/* Payment request banner */}
       {isPaymentRequest && destChain && (
-        <div className="bg-blue-900/30 border border-blue-800 rounded-xl p-3">
-          <p className="text-sm text-blue-300">
-            Send <span className="font-medium">{amount} {token}</span> to{" "}
-            <span className="font-mono text-xs">{truncateAddress(initialParams!.recipient!)}</span>{" "}
-            on {destChain.name}
+        <div className="border-2 border-amber-400 bg-navy-800 p-3">
+          <p className="font-pixel text-[8px] text-amber-400 leading-relaxed">
+            SEND {amount} {token} TO{" "}
+            <span className="text-pixel-cyan">{truncateAddress(initialParams!.recipient!)}</span>{" "}
+            ON {destChain.name.toUpperCase()}
           </p>
         </div>
       )}
@@ -239,19 +223,19 @@ export function SwapForm({ initialParams }: SwapFormProps) {
       />
 
       {/* Input amount + token */}
-      <div className="bg-gray-800 rounded-xl p-4">
+      <div className="bg-navy-800 border-2 border-navy-600 p-4">
         <div className="flex justify-between items-center mb-2">
-          <label className="text-xs text-gray-500">You send</label>
+          <label className="font-pixel text-[8px] text-teal-600 uppercase">You send</label>
           {formattedBalance !== null && (
             <button
               onClick={() => setAmount(formattedBalance)}
-              className="text-xs text-gray-500 hover:text-white"
+              className="font-pixel text-[8px] text-teal-600 hover:text-teal-400 transition-colors"
             >
-              Balance: {Number(formattedBalance).toLocaleString()}
+              BAL: {Number(formattedBalance).toLocaleString()}
             </button>
           )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
           <input
             type="number"
             placeholder="0.00"
@@ -262,10 +246,10 @@ export function SwapForm({ initialParams }: SwapFormProps) {
               setErrorMsg(null);
             }}
             readOnly={isPaymentRequest}
-            className={`flex-1 bg-transparent text-2xl font-medium outline-none placeholder-gray-600 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${isPaymentRequest ? "text-gray-400" : ""}`}
+            className={`flex-1 bg-transparent text-2xl font-bold outline-none placeholder-navy-600 text-pixel-cyan ${isPaymentRequest ? "opacity-60" : ""}`}
           />
           {isPaymentRequest ? (
-            <span className="bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm font-medium">
+            <span className="font-pixel text-[10px] text-pixel-cyan border-2 border-navy-600 px-3 py-2">
               {token}
             </span>
           ) : (
@@ -273,24 +257,20 @@ export function SwapForm({ initialParams }: SwapFormProps) {
           )}
         </div>
         {insufficientBalance && (
-          <p className="text-xs text-red-400 mt-2">Insufficient balance</p>
+          <p className="font-pixel text-[8px] text-pixel-red mt-2">INSUFFICIENT BALANCE</p>
         )}
       </div>
 
       {/* Arrow */}
-      <div className="flex justify-center -my-2">
-        <div className="bg-gray-800 border border-gray-700 rounded-lg p-1.5">
-          <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-          </svg>
-        </div>
+      <div className="flex justify-center -my-1">
+        <div className="font-pixel text-teal-600 text-lg">V</div>
       </div>
 
       {/* Dest chain */}
       {isPaymentRequest ? (
         <div>
-          <label className="block text-xs text-gray-500 mb-1">To</label>
-          <div className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-400">
+          <label className="block font-pixel text-[8px] text-teal-600 uppercase tracking-widest mb-2">To</label>
+          <div className="w-full pixel-input text-sm opacity-60">
             {destChain?.name ?? "Unknown chain"}
           </div>
         </div>
@@ -303,11 +283,11 @@ export function SwapForm({ initialParams }: SwapFormProps) {
         />
       )}
 
-      {/* Recipient display for payment requests */}
+      {/* Recipient for payment requests */}
       {isPaymentRequest && (
         <div>
-          <label className="block text-xs text-gray-500 mb-1">Recipient</label>
-          <div className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm font-mono text-gray-400">
+          <label className="block font-pixel text-[8px] text-teal-600 uppercase tracking-widest mb-2">Recipient</label>
+          <div className="w-full pixel-input text-xs opacity-60 break-all">
             {initialParams!.recipient}
           </div>
         </div>
@@ -315,14 +295,14 @@ export function SwapForm({ initialParams }: SwapFormProps) {
 
       {/* Output preview */}
       {parsedAmount > 0n && step === "form" && (
-        <div className="bg-gray-800 rounded-xl p-4">
-          <label className="text-xs text-gray-500 block mb-2">
-            {isPaymentRequest ? "Recipient gets (minimum)" : "You receive (minimum)"}
+        <div className="bg-navy-800 border-2 border-navy-600 p-4">
+          <label className="font-pixel text-[8px] text-teal-600 uppercase block mb-2">
+            {isPaymentRequest ? "Recipient gets (min)" : "You receive (min)"}
           </label>
-          <p className="text-2xl font-medium">
+          <p className="text-xl font-bold text-pixel-cyan">
             {formatUnits(minOutput, tokenInfo?.decimals ?? 6)} {token}
           </p>
-          <p className="text-xs text-gray-500 mt-1">1% max slippage</p>
+          <p className="font-pixel text-[8px] text-teal-600 mt-1">1% MAX SLIPPAGE</p>
         </div>
       )}
 
@@ -337,60 +317,57 @@ export function SwapForm({ initialParams }: SwapFormProps) {
       )}
 
       {step === "accepted" && (
-        <div className="bg-green-900/30 border border-green-800 rounded-xl p-4 text-center">
-          <p className="text-green-300 text-sm font-medium">Quote accepted</p>
-          <p className="text-xs text-gray-400 mt-1">
+        <div className="border-2 border-pixel-green bg-navy-800 p-4 text-center">
+          <p className="font-pixel text-[10px] text-pixel-green">QUOTE ACCEPTED</p>
+          <p className="text-xs text-teal-600 mt-2">
             {isPaymentRequest
-              ? "Maker is executing the payment. Track progress in Activity."
-              : "Maker is executing your order. Track progress in Activity."}
+              ? "Maker is executing the payment."
+              : "Maker is executing your order."}
           </p>
         </div>
       )}
 
-      {/* Network switch prompt */}
+      {/* Action button */}
       {networkMismatch && sourceChain ? (
         <button
           onClick={() => switchChain({ chainId: sourceChainId! })}
-          className="w-full bg-yellow-600 text-white font-medium py-3 rounded-xl hover:bg-yellow-500 transition-colors"
+          className="w-full pixel-btn-amber"
         >
           Switch to {sourceChain.name}
         </button>
       ) : !isConnected ? (
-        <div className="text-center text-sm text-gray-500 py-2">
-          Connect your wallet to {isPaymentRequest ? "pay" : "swap"}
+        <div className="text-center font-pixel text-[10px] text-teal-600 py-3">
+          CONNECT WALLET TO {isPaymentRequest ? "PAY" : "SWAP"}
         </div>
       ) : step === "accepted" ? (
-        <button
-          onClick={handleReset}
-          className="w-full bg-gray-800 text-white font-medium py-3 rounded-xl hover:bg-gray-700 transition-colors"
-        >
-          {isPaymentRequest ? "Done" : "New Swap"}
+        <button onClick={handleReset} className="w-full pixel-btn">
+          {isPaymentRequest ? "DONE" : "NEW SWAP"}
         </button>
       ) : (
         <button
           onClick={handleSwap}
           disabled={!canSwap}
-          className="w-full bg-white text-black font-medium py-3 rounded-xl hover:bg-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          className="w-full pixel-btn"
         >
           {step === "approving"
-            ? "Approving..."
+            ? "APPROVING..."
             : step === "signing"
-              ? "Sign order in wallet..."
+              ? "SIGN IN WALLET..."
               : step === "quoting"
-                ? "Waiting for quotes..."
+                ? "WAITING FOR QUOTES..."
                 : insufficientBalance
-                  ? "Insufficient balance"
+                  ? "INSUFFICIENT BALANCE"
                   : needsApproval
-                    ? `Approve ${token}`
+                    ? `APPROVE ${token}`
                     : isPaymentRequest
-                      ? `Pay ${amount} ${token}`
-                      : "Swap"}
+                      ? `PAY ${amount} ${token}`
+                      : "SWAP"}
         </button>
       )}
 
-      {/* Error display */}
+      {/* Error */}
       {(errorMsg || relay.error) && (
-        <p className="text-xs text-red-400 text-center">
+        <p className="font-pixel text-[8px] text-pixel-red text-center">
           {errorMsg || relay.error}
         </p>
       )}

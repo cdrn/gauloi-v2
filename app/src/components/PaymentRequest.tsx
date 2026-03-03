@@ -17,7 +17,6 @@ export function PaymentRequest() {
   const [generated, setGenerated] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  // Auto-fill recipient from connected wallet
   const effectiveRecipient = recipient || address || "";
 
   const destChain = destChainId ? SUPPORTED_CHAINS[destChainId] : null;
@@ -62,45 +61,44 @@ export function PaymentRequest() {
   if (generated && canGenerate) {
     const url = buildUrl();
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-6">
-        <h2 className="text-lg font-semibold text-center">Payment Request</h2>
+      <div className="pixel-border bg-navy-900 p-6 space-y-6">
+        <h2 className="font-pixel text-sm text-pixel-cyan text-center">PAYMENT REQUEST</h2>
 
-        <div className="text-center space-y-1">
-          <p className="text-2xl font-medium">{amount} {token}</p>
-          <p className="text-sm text-gray-400">on {destChain?.name}</p>
-          <p className="text-xs text-gray-500 font-mono">
+        <div className="text-center space-y-2">
+          <p className="font-pixel text-lg text-pixel-cyan">{amount} {token}</p>
+          <p className="text-sm text-teal-600">on {destChain?.name}</p>
+          <p className="text-xs text-teal-600 font-mono">
             to {effectiveRecipient.slice(0, 6)}...{effectiveRecipient.slice(-4)}
           </p>
         </div>
 
         {/* QR Code */}
         <div className="flex justify-center">
-          <div className="bg-white p-4 rounded-xl">
+          <div className="border-4 border-teal-600 p-3 bg-white">
             <QRCodeSVG
               value={url}
               size={200}
               level="M"
               includeMargin={false}
+              fgColor="#0a0a2e"
+              bgColor="#ffffff"
             />
           </div>
         </div>
 
         {/* URL + copy */}
-        <div className="space-y-2">
-          <div className="bg-gray-800 rounded-lg p-3 text-xs font-mono text-gray-400 break-all">
+        <div className="space-y-3">
+          <div className="bg-navy-800 border-2 border-navy-600 p-3 text-[10px] font-mono text-teal-600 break-all">
             {url}
           </div>
-          <button
-            onClick={handleCopy}
-            className="w-full bg-gray-800 text-white font-medium py-2.5 rounded-xl hover:bg-gray-700 transition-colors text-sm"
-          >
-            {copied ? "Copied!" : "Copy Link"}
+          <button onClick={handleCopy} className="w-full pixel-btn">
+            {copied ? "COPIED!" : "COPY LINK"}
           </button>
         </div>
 
         <button
           onClick={handleReset}
-          className="w-full text-sm text-gray-500 hover:text-white transition-colors py-1"
+          className="w-full font-pixel text-[8px] text-teal-600 hover:text-teal-400 transition-colors py-1 uppercase"
         >
           Create new request
         </button>
@@ -109,13 +107,13 @@ export function PaymentRequest() {
   }
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4">
-      <h2 className="text-lg font-semibold">Request Payment</h2>
-      <p className="text-sm text-gray-500">
+    <div className="pixel-border bg-navy-900 p-6 space-y-4">
+      <h2 className="font-pixel text-sm text-pixel-cyan">REQUEST</h2>
+      <p className="text-sm text-teal-600">
         Generate a QR code that anyone can scan to pay you.
       </p>
 
-      {/* Dest chain (where you want to receive) */}
+      {/* Dest chain */}
       <ChainSelector
         label="Receive on"
         value={destChainId}
@@ -123,52 +121,52 @@ export function PaymentRequest() {
       />
 
       {/* Token + amount */}
-      <div className="bg-gray-800 rounded-xl p-4">
-        <label className="text-xs text-gray-500 block mb-2">Amount</label>
-        <div className="flex gap-2">
+      <div className="bg-navy-800 border-2 border-navy-600 p-4">
+        <label className="font-pixel text-[8px] text-teal-600 uppercase block mb-2">Amount</label>
+        <div className="flex gap-2 items-center">
           <input
             type="number"
             placeholder="0.00"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            className="flex-1 bg-transparent text-2xl font-medium outline-none placeholder-gray-600 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+            className="flex-1 bg-transparent text-2xl font-bold outline-none placeholder-navy-600 text-pixel-cyan"
           />
           <TokenSelector value={token} onChange={setToken} />
         </div>
       </div>
 
-      {/* Recipient address */}
+      {/* Recipient */}
       <div>
-        <label className="block text-xs text-gray-500 mb-1">
-          Recipient address
+        <label className="block font-pixel text-[8px] text-teal-600 uppercase tracking-widest mb-2">
+          Recipient
         </label>
         <input
           type="text"
           placeholder={isConnected && address ? address : "0x..."}
           value={recipient}
           onChange={(e) => setRecipient(e.target.value)}
-          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-gray-500 placeholder-gray-600"
+          className="w-full pixel-input text-xs"
         />
         {isConnected && !recipient && (
-          <p className="text-xs text-gray-600 mt-1">
-            Using connected wallet address
+          <p className="font-pixel text-[7px] text-navy-600 mt-1">
+            USING CONNECTED WALLET
           </p>
         )}
       </div>
 
       {!hasToken && destChainId && (
-        <p className="text-xs text-yellow-400">
-          {token} not available on {destChain?.name ?? "this chain"}
+        <p className="font-pixel text-[8px] text-amber-400">
+          {token} NOT AVAILABLE ON {destChain?.name?.toUpperCase() ?? "THIS CHAIN"}
         </p>
       )}
 
-      {/* Generate button */}
+      {/* Generate */}
       <button
         onClick={handleGenerate}
         disabled={!canGenerate}
-        className="w-full bg-white text-black font-medium py-3 rounded-xl hover:bg-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        className="w-full pixel-btn"
       >
-        Generate QR Code
+        GENERATE QR
       </button>
     </div>
   );

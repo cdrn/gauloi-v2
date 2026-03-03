@@ -3,6 +3,7 @@ import "@rainbow-me/rainbowkit/styles.css";
 import type { Metadata } from "next";
 import { Providers } from "@/components/Providers";
 import { Header } from "@/components/Header";
+import { Marquee } from "@/components/Marquee";
 
 export const metadata: Metadata = {
   title: "Gauloi — Cross-Chain Stablecoin Swaps",
@@ -15,11 +16,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <body className="bg-gray-950 text-gray-100 min-h-screen">
+    <html lang="en">
+      <body className="min-h-screen">
         <Providers>
+          <Marquee />
           <Header />
-          <main className="max-w-lg mx-auto px-4 py-12">
+          <main className="max-w-lg mx-auto px-4 py-8">
             {children}
           </main>
         </Providers>

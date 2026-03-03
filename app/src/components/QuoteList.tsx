@@ -28,8 +28,8 @@ function truncateAddress(addr: string): string {
 export function QuoteList({ quotes, inputAmount, decimals, onSelect }: QuoteListProps) {
   if (quotes.length === 0) {
     return (
-      <div className="text-center text-gray-500 py-6 text-sm">
-        Waiting for maker quotes...
+      <div className="text-center text-teal-600 py-6">
+        <p className="font-pixel text-[10px] animate-pulse">WAITING FOR QUOTES...</p>
       </div>
     );
   }
@@ -41,7 +41,9 @@ export function QuoteList({ quotes, inputAmount, decimals, onSelect }: QuoteList
 
   return (
     <div className="space-y-2">
-      <p className="text-xs text-gray-500">{quotes.length} quote{quotes.length > 1 ? "s" : ""} received</p>
+      <p className="font-pixel text-[8px] text-teal-600 uppercase">
+        {quotes.length} quote{quotes.length > 1 ? "s" : ""} received
+      </p>
       {sorted.map((quote, i) => {
         const spread = inputAmount > 0n
           ? ((Number(inputAmount) - Number(quote.outputAmount)) / Number(inputAmount)) * 10000
@@ -51,19 +53,19 @@ export function QuoteList({ quotes, inputAmount, decimals, onSelect }: QuoteList
           <button
             key={`${quote.maker}-${i}`}
             onClick={() => onSelect(quote.maker)}
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-left hover:border-gray-500 transition-colors"
+            className="w-full bg-navy-800 border-2 border-navy-600 p-3 text-left hover:border-teal-600 transition-colors"
           >
             <div className="flex justify-between items-center">
               <div>
-                <span className="text-sm font-medium">
+                <span className="text-sm font-bold text-pixel-cyan">
                   {formatAmount(quote.outputAmount, decimals)}
                 </span>
-                <span className="text-xs text-gray-500 ml-2">
+                <span className="text-xs text-teal-600 ml-2">
                   {spread.toFixed(1)} bps
                 </span>
               </div>
-              <div className="text-xs text-gray-500">
-                {truncateAddress(quote.maker)} &middot; ~{quote.estimatedFillTime}s
+              <div className="text-[10px] text-teal-600 font-mono">
+                {truncateAddress(quote.maker)} | ~{quote.estimatedFillTime}s
               </div>
             </div>
           </button>

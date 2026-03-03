@@ -15,7 +15,6 @@ interface StoredIntent {
 export default function ActivityPage() {
   const [intents, setIntents] = useState<StoredIntent[]>([]);
 
-  // Load from localStorage and refresh periodically
   useEffect(() => {
     const load = () => {
       const stored = localStorage.getItem("gauloi_intents");
@@ -32,15 +31,15 @@ export default function ActivityPage() {
   if (intents.length === 0) {
     return (
       <div className="text-center py-20">
-        <p className="text-lg text-gray-400">No swaps yet</p>
-        <p className="text-sm text-gray-600 mt-2">
-          Your swap history will appear here after your first swap.
+        <p className="font-pixel text-sm text-teal-600">NO SWAPS YET</p>
+        <p className="text-sm text-navy-600 mt-4">
+          Your swap history will appear here.
         </p>
         <Link
           href="/"
-          className="inline-block mt-6 text-sm text-white bg-gray-800 px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors"
+          className="inline-block mt-6 pixel-btn"
         >
-          Make a swap
+          MAKE A SWAP
         </Link>
       </div>
     );
@@ -49,8 +48,8 @@ export default function ActivityPage() {
   return (
     <div className="space-y-3">
       <div className="flex justify-between items-center mb-4">
-        <h2 className="text-lg font-semibold">Your Swaps</h2>
-        <span className="text-xs text-gray-600">{intents.length} total</span>
+        <h2 className="font-pixel text-sm text-pixel-cyan">ACTIVITY</h2>
+        <span className="font-pixel text-[8px] text-teal-600">{intents.length} TOTAL</span>
       </div>
       {intents.map((intent) => (
         <IntentStatus

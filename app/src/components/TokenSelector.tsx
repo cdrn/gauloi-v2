@@ -12,7 +12,7 @@ export function TokenSelector({ value, onChange }: TokenSelectorProps) {
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:border-gray-500"
+      className="pixel-input text-sm font-pixel text-[10px] text-pixel-cyan"
     >
       {Object.entries(SUPPORTED_TOKENS).map(([symbol]) => (
         <option key={symbol} value={symbol}>
