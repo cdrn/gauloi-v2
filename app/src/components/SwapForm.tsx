@@ -261,9 +261,23 @@ export function SwapForm({ initialParams }: SwapFormProps) {
         )}
       </div>
 
-      {/* Arrow */}
+      {/* Arrow / swap button */}
       <div className="flex justify-center -my-1">
-        <div className="font-pixel text-teal-600 text-lg">V</div>
+        {isPaymentRequest ? (
+          <div className="font-pixel text-teal-600 text-lg">V</div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              const tmp = sourceChainId;
+              setSourceChainId(destChainId);
+              setDestChainId(tmp);
+            }}
+            className="font-pixel text-teal-600 text-lg hover:text-teal-400 transition-colors"
+          >
+            V
+          </button>
+        )}
       </div>
 
       {/* Dest chain */}
