@@ -38,21 +38,23 @@ export function SwapForm({ initialParams }: SwapFormProps) {
 
   const [sourceChainId, setSourceChainId] = useState<number | null>(null);
   const [destChainId, setDestChainId] = useState<number | null>(initialParams?.destChainId ?? null);
-  const [token, setToken] = useState(initialParams?.token ?? "USDC");
+  const [inputSymbol, setInputSymbol] = useState(initialParams?.token ?? "USDC");
+  const [outputSymbol, setOutputSymbol] = useState(initialParams?.token ?? "USDC");
   const [amount, setAmount] = useState(initialParams?.amount ?? "");
   const [step, setStep] = useState<SwapStep>("form");
   const [currentIntentId, setCurrentIntentId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const tokenInfo = SUPPORTED_TOKENS[token];
+  const inputTokenInfo = SUPPORTED_TOKENS[inputSymbol];
+  const outputTokenInfo = SUPPORTED_TOKENS[outputSymbol];
   const sourceChain = sourceChainId ? SUPPORTED_CHAINS[sourceChainId] : null;
   const destChain = destChainId ? SUPPORTED_CHAINS[destChainId] : null;
 
-  const inputToken = tokenInfo?.addresses[sourceChainId ?? 0] as `0x${string}` | undefined;
-  const outputToken = tokenInfo?.addresses[destChainId ?? 0] as `0x${string}` | undefined;
+  const inputToken = inputTokenInfo?.addresses[sourceChainId ?? 0] as `0x${string}` | undefined;
+  const outputToken = outputTokenInfo?.addresses[destChainId ?? 0] as `0x${string}` | undefined;
 
   const parsedAmount = amount
-    ? parseUnits(amount, tokenInfo?.decimals ?? 6)
+    ? parseUnits(amount, inputTokenInfo?.decimals ?? 6)
     : 0n;
 
   const minOutput = (parsedAmount * 9900n) / 10000n;
@@ -171,8 +173,8 @@ export function SwapForm({ initialParams }: SwapFormProps) {
     return () => clearTimeout(timer);
   }, [step, relay.quotes]);
 
-  const formattedBalance = balance !== undefined && tokenInfo
-    ? formatUnits(balance, tokenInfo.decimals)
+  const formattedBalance = balance !== undefined && inputTokenInfo
+    ? formatUnits(balance, inputTokenInfo.decimals)
     : null;
 
   const insufficientBalance = balance !== undefined && parsedAmount > 0n && parsedAmount > balance;
@@ -207,7 +209,7 @@ export function SwapForm({ initialParams }: SwapFormProps) {
       {isPaymentRequest && destChain && (
         <div className="border-2 border-amber-400 bg-navy-800 p-3">
           <p className="font-pixel text-[8px] text-amber-400 leading-relaxed">
-            SEND {amount} {token} TO{" "}
+            SEND {amount} {inputSymbol} TO{" "}
             <span className="text-pixel-cyan">{truncateAddress(initialParams!.recipient!)}</span>{" "}
             ON {destChain.name.toUpperCase()}
           </p>
@@ -250,10 +252,10 @@ export function SwapForm({ initialParams }: SwapFormProps) {
           />
           {isPaymentRequest ? (
             <span className="font-pixel text-[10px] text-pixel-cyan border-2 border-navy-600 px-3 py-2">
-              {token}
+              {inputSymbol}
             </span>
           ) : (
-            <TokenSelector value={token} onChange={setToken} />
+            <TokenSelector value={inputSymbol} onChange={setInputSymbol} />
           )}
         </div>
         {insufficientBalance && (
@@ -269,9 +271,12 @@ export function SwapForm({ initialParams }: SwapFormProps) {
           <button
             type="button"
             onClick={() => {
-              const tmp = sourceChainId;
+              const tmpChain = sourceChainId;
               setSourceChainId(destChainId);
-              setDestChainId(tmp);
+              setDestChainId(tmpChain);
+              const tmpToken = inputSymbol;
+              setInputSymbol(outputSymbol);
+              setOutputSymbol(tmpToken);
             }}
             className="font-pixel text-teal-600 text-lg hover:text-teal-400 transition-colors"
           >
@@ -310,12 +315,23 @@ export function SwapForm({ initialParams }: SwapFormProps) {
       {/* Output preview */}
       {parsedAmount > 0n && step === "form" && (
         <div className="bg-navy-800 border-2 border-navy-600 p-4">
-          <label className="font-pixel text-[8px] text-teal-600 uppercase block mb-2">
-            {isPaymentRequest ? "Recipient gets (min)" : "You receive (min)"}
-          </label>
-          <p className="text-xl font-bold text-pixel-cyan">
-            {formatUnits(minOutput, tokenInfo?.decimals ?? 6)} {token}
-          </p>
+          <div className="flex justify-between items-center mb-2">
+            <label className="font-pixel text-[8px] text-teal-600 uppercase">
+              {isPaymentRequest ? "Recipient gets (min)" : "You receive (min)"}
+            </label>
+          </div>
+          <div className="flex gap-2 items-center">
+            <p className="flex-1 text-xl font-bold text-pixel-cyan">
+              {formatUnits(minOutput, outputTokenInfo?.decimals ?? 6)}
+            </p>
+            {isPaymentRequest ? (
+              <span className="font-pixel text-[10px] text-pixel-cyan border-2 border-navy-600 px-3 py-2">
+                {outputSymbol}
+              </span>
+            ) : (
+              <TokenSelector value={outputSymbol} onChange={setOutputSymbol} />
+            )}
+          </div>
           <p className="font-pixel text-[8px] text-teal-600 mt-1">1% MAX SLIPPAGE</p>
         </div>
       )}
@@ -325,7 +341,7 @@ export function SwapForm({ initialParams }: SwapFormProps) {
         <QuoteList
           quotes={relay.quotes}
           inputAmount={parsedAmount}
-          decimals={tokenInfo?.decimals ?? 6}
+          decimals={outputTokenInfo?.decimals ?? 6}
           onSelect={handleSelectQuote}
         />
       )}
@@ -372,9 +388,9 @@ export function SwapForm({ initialParams }: SwapFormProps) {
                 : insufficientBalance
                   ? "INSUFFICIENT BALANCE"
                   : needsApproval
-                    ? `APPROVE ${token}`
+                    ? `APPROVE ${inputSymbol}`
                     : isPaymentRequest
-                      ? `PAY ${amount} ${token}`
+                      ? `PAY ${amount} ${inputSymbol}`
                       : "SWAP"}
         </button>
       )}
