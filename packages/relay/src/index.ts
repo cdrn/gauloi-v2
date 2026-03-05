@@ -1,6 +1,6 @@
 import { startRelayServer } from "./server.js";
 
-const port = parseInt(process.env.RELAY_PORT ?? "8080", 10);
+const port = parseInt(process.env.PORT ?? process.env.RELAY_PORT ?? "8080", 10);
 
 const { close } = startRelayServer({ port });
 
