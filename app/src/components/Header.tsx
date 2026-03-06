@@ -78,6 +78,7 @@ export function Header() {
           {navLink("/", "Swap")}
           {navLink("/request", "Request")}
           {navLink("/activity", "Activity")}
+          {navLink("/maker", "Maker")}
         </nav>
       </div>
       <PixelConnectButton />
