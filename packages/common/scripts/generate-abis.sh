@@ -1,11 +1,17 @@
 #!/bin/bash
 # Extracts ABIs from Foundry build artifacts into TypeScript constants
+# If artifacts don't exist, skips and uses already-committed ABI files
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CONTRACTS_OUT="$REPO_ROOT/contracts/out"
 ABI_DIR="$SCRIPT_DIR/../src/abis"
+
+if [ ! -d "$CONTRACTS_OUT" ]; then
+    echo "No contracts/out directory — skipping ABI generation (using committed ABIs)"
+    exit 0
+fi
 
 mkdir -p "$ABI_DIR"
 
@@ -14,11 +20,10 @@ extract_abi() {
     local artifact="$CONTRACTS_OUT/${contract_name}.sol/${contract_name}.json"
 
     if [ ! -f "$artifact" ]; then
-        echo "ERROR: artifact not found: $artifact"
-        exit 1
+        echo "SKIP: $contract_name (artifact not found)"
+        return 0
     fi
 
-    # Extract ABI array from the artifact JSON
     local abi
     abi=$(node -e "const a = require('$artifact'); console.log(JSON.stringify(a.abi, null, 2))")
 
