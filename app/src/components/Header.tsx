@@ -57,7 +57,7 @@ export function Header() {
     return (
       <Link
         href={href}
-        className={`font-pixel text-[8px] sm:text-xs uppercase tracking-wider px-2 py-2 sm:px-4 border-2 transition-colors ${
+        className={`font-pixel text-[8px] sm:text-xs uppercase tracking-wider px-2 py-2 sm:px-4 border-2 transition-colors shrink-0 ${
           active
             ? "border-teal-400 text-teal-400 bg-navy-700"
             : "border-transparent text-teal-600 hover:text-teal-400 hover:border-navy-600"
@@ -76,7 +76,7 @@ export function Header() {
         </Link>
         <PixelConnectButton />
       </div>
-      <nav className="flex px-4 pb-3 sm:px-6 gap-1 sm:gap-2 overflow-x-auto">
+      <nav className="flex flex-nowrap px-4 pb-3 sm:px-6 gap-0 sm:gap-2 overflow-x-auto">
         {navLink("/", "Swap")}
         {navLink("/request", "Request")}
         {navLink("/activity", "Activity")}
