@@ -163,13 +163,13 @@ export function ChainStakeCard({ chain, maker }: ChainStakeCardProps) {
     });
   };
 
-  // Parse maker info — getMakerInfo returns undefined if maker never staked
-  const info = makerInfo as readonly [bigint, bigint, bigint, bigint, boolean] | undefined;
-  const stakedAmount = info?.[0] ?? 0n;
-  const activeExposure = info?.[1] ?? 0n;
-  const unstakeRequestTime = Number(info?.[2] ?? 0n);
-  const pendingUnstakeAmount = info?.[3] ?? 0n;
-  const isActive = info?.[4] ?? false;
+  // Parse maker info — viem returns named tuple as an object
+  const info = makerInfo as { stakedAmount: bigint; activeExposure: bigint; unstakeRequestTime: bigint; unstakeAmount: bigint; isActive: boolean } | undefined;
+  const stakedAmount = info?.stakedAmount ?? 0n;
+  const activeExposure = info?.activeExposure ?? 0n;
+  const unstakeRequestTime = Number(info?.unstakeRequestTime ?? 0n);
+  const pendingUnstakeAmount = info?.unstakeAmount ?? 0n;
+  const isActive = info?.isActive ?? false;
 
   const availableCapacity = stakedAmount > activeExposure ? stakedAmount - activeExposure : 0n;
   const cooldownSeconds = cooldownRaw ? Number(cooldownRaw) : 0;
