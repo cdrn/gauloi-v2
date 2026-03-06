@@ -3,13 +3,14 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAccount, useReadContract, useSwitchChain } from "wagmi";
 import { erc20Abi, formatUnits, parseUnits } from "viem";
-import { SUPPORTED_CHAINS, SUPPORTED_TOKENS } from "@gauloi/common";
+import { SUPPORTED_CHAINS, SUPPORTED_TOKENS, IntentState } from "@gauloi/common";
 import { ChainSelector } from "./ChainSelector";
 import { TokenSelector } from "./TokenSelector";
 import { QuoteList } from "./QuoteList";
 import { useTokenAllowance } from "@/hooks/useTokenAllowance";
 import { useSignOrder } from "@/hooks/useSignOrder";
 import { useRelay } from "@/hooks/useRelay";
+import { useIntentStatus } from "@/hooks/useIntentStatus";
 
 type SwapStep = "form" | "approving" | "signing" | "quoting" | "accepted";
 
@@ -86,6 +87,11 @@ export function SwapForm({ initialParams }: SwapFormProps) {
 
   const { sign, isPending: isSigning } = useSignOrder();
   const relay = useRelay({ url: RELAY_URL });
+
+  const { state: intentState, label: intentLabel } = useIntentStatus(
+    currentIntentId as `0x${string}` | undefined,
+    sourceChain?.escrowAddress as `0x${string}` | undefined,
+  );
 
   const handleSign = useCallback(async () => {
     if (!address || !sourceChain || !destChain || !inputToken || !outputToken || !destinationAddress) return;
@@ -347,13 +353,41 @@ export function SwapForm({ initialParams }: SwapFormProps) {
       )}
 
       {step === "accepted" && (
-        <div className="border-2 border-pixel-green bg-navy-800 p-4 text-center">
-          <p className="font-pixel text-[10px] text-pixel-green">QUOTE ACCEPTED</p>
-          <p className="text-xs text-teal-600 mt-2">
-            {isPaymentRequest
-              ? "Maker is executing the payment."
-              : "Maker is executing your order."}
-          </p>
+        <div className="bg-navy-800 border-2 border-navy-600 p-4 space-y-3">
+          {/* Progress steps */}
+          <div className="space-y-2">
+            {[
+              { state: null, label: "QUOTE ACCEPTED", done: true },
+              { state: IntentState.Committed, label: "ORDER COMMITTED", done: intentState !== null && intentState >= IntentState.Committed },
+              { state: IntentState.Filled, label: "FILLED ON DESTINATION", done: intentState !== null && intentState >= IntentState.Filled },
+              { state: IntentState.Settled, label: "SETTLED", done: intentState === IntentState.Settled },
+            ].map((s, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className={`w-2 h-2 inline-block ${
+                  s.done ? "bg-pixel-green" : "bg-navy-600"
+                }`} />
+                <span className={`font-pixel text-[8px] ${
+                  s.done ? "text-pixel-green" : "text-teal-600"
+                }`}>
+                  {s.label}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* Status message */}
+          {intentState === IntentState.Disputed && (
+            <p className="font-pixel text-[8px] text-pixel-red">FILL DISPUTED</p>
+          )}
+          {intentState === IntentState.Expired && (
+            <p className="font-pixel text-[8px] text-pixel-red">ORDER EXPIRED</p>
+          )}
+          {intentState === IntentState.Settled && (
+            <p className="font-pixel text-[8px] text-pixel-green">SWAP COMPLETE</p>
+          )}
+          {intentState !== null && intentState < IntentState.Settled && intentState !== IntentState.Disputed && intentState !== IntentState.Expired && (
+            <p className="font-pixel text-[8px] text-teal-600 animate-pulse">PROCESSING...</p>
+          )}
         </div>
       )}
 
