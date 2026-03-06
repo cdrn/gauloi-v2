@@ -57,7 +57,7 @@ export function Header() {
     return (
       <Link
         href={href}
-        className={`font-pixel text-[8px] sm:text-xs uppercase tracking-wider px-2 py-2 sm:px-4 border-2 transition-colors shrink-0 ${
+        className={`font-pixel text-[8px] sm:text-xs uppercase tracking-wider px-2 py-1 sm:px-4 sm:py-2 border-2 transition-colors shrink-0 ${
           active
             ? "border-teal-400 text-teal-400 bg-navy-700"
             : "border-transparent text-teal-600 hover:text-teal-400 hover:border-navy-600"
@@ -69,20 +69,24 @@ export function Header() {
   };
 
   return (
-    <header className="border-b-2 border-navy-600 bg-navy-900">
-      <div className="flex items-center justify-between px-4 py-3 sm:px-6 sm:py-5">
-        <Link href="/" className="font-pixel text-sm sm:text-lg text-pixel-cyan tracking-wider">
-          GAULOI
-        </Link>
-        <PixelConnectButton />
+    <header className="border-b-2 border-navy-600 bg-navy-900 px-4 py-3 sm:px-6 sm:py-4">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-4 sm:gap-6 min-w-0">
+          <Link href="/" className="font-pixel text-sm sm:text-lg text-pixel-cyan tracking-wider shrink-0">
+            GAULOI
+          </Link>
+          <nav className="flex items-center gap-0 sm:gap-1 overflow-x-auto">
+            {navLink("/", "Swap")}
+            {navLink("/request", "Request")}
+            {navLink("/activity", "Activity")}
+            {navLink("/stats", "Stats")}
+            {navLink("/maker", "Maker")}
+          </nav>
+        </div>
+        <div className="shrink-0">
+          <PixelConnectButton />
+        </div>
       </div>
-      <nav className="flex flex-nowrap px-4 pb-3 sm:px-6 gap-0 sm:gap-2 overflow-x-auto">
-        {navLink("/", "Swap")}
-        {navLink("/request", "Request")}
-        {navLink("/activity", "Activity")}
-        {navLink("/stats", "Stats")}
-        {navLink("/maker", "Maker")}
-      </nav>
     </header>
   );
 }
