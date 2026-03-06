@@ -61,7 +61,7 @@ export function PaymentRequest() {
   if (generated && canGenerate) {
     const url = buildUrl();
     return (
-      <div className="pixel-border bg-navy-900 p-6 space-y-6">
+      <div className="pixel-border bg-navy-900 p-4 sm:p-6 space-y-6">
         <h2 className="font-pixel text-sm text-pixel-cyan text-center">PAYMENT REQUEST</h2>
 
         <div className="text-center space-y-2">
@@ -77,11 +77,12 @@ export function PaymentRequest() {
           <div className="border-4 border-teal-600 p-3 bg-white">
             <QRCodeSVG
               value={url}
-              size={200}
+              size={180}
               level="M"
               includeMargin={false}
               fgColor="#0a0a2e"
               bgColor="#ffffff"
+              className="w-[160px] h-[160px] sm:w-[180px] sm:h-[180px]"
             />
           </div>
         </div>
@@ -107,7 +108,7 @@ export function PaymentRequest() {
   }
 
   return (
-    <div className="pixel-border bg-navy-900 p-6 space-y-4">
+    <div className="pixel-border bg-navy-900 p-4 sm:p-6 space-y-4">
       <h2 className="font-pixel text-sm text-pixel-cyan">REQUEST</h2>
       <p className="text-sm text-teal-600">
         Generate a QR code that anyone can scan to pay you.

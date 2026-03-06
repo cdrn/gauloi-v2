@@ -43,12 +43,12 @@
 @layer components {
   .pixel-border {
     @apply border-2 border-teal-600;
-    box-shadow: 4px 4px 0px theme('colors.teal.600');
+    box-shadow: 3px 3px 0px theme('colors.teal.600');
   }
 
   .pixel-border-amber {
     @apply border-2 border-amber-400;
-    box-shadow: 4px 4px 0px theme('colors.amber.400');
+    box-shadow: 3px 3px 0px theme('colors.amber.400');
   }
 
   .pixel-card {
@@ -62,12 +62,12 @@
   }
 
   .pixel-btn {
-    @apply font-pixel text-xs uppercase tracking-wider px-6 py-3;
+    @apply font-pixel text-xs uppercase tracking-wider px-4 py-2 sm:px-6 sm:py-3;
     @apply border-2 border-teal-400 bg-navy-800 text-teal-400;
     @apply hover:bg-teal-600 hover:text-navy-900 hover:border-teal-400;
     @apply disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-navy-800 disabled:hover:text-teal-400;
     @apply transition-colors;
-    box-shadow: 4px 4px 0px theme('colors.teal.600');
+    box-shadow: 3px 3px 0px theme('colors.teal.600');
   }
 
   .pixel-btn:hover:not(:disabled) {
@@ -81,11 +81,11 @@
   }
 
   .pixel-btn-amber {
-    @apply font-pixel text-xs uppercase tracking-wider px-6 py-3;
+    @apply font-pixel text-xs uppercase tracking-wider px-4 py-2 sm:px-6 sm:py-3;
     @apply border-2 border-amber-400 bg-navy-800 text-amber-400;
     @apply hover:bg-amber-400 hover:text-navy-900;
     @apply transition-colors;
-    box-shadow: 4px 4px 0px theme('colors.amber.500');
+    box-shadow: 3px 3px 0px theme('colors.amber.500');
   }
 
   .pixel-btn-amber:hover {

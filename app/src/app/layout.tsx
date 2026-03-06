@@ -17,12 +17,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="min-h-screen bg-fixed bg-center bg-cover" style={{ backgroundImage: "url('/gauloi_ziggurat.png')" }} suppressHydrationWarning>
+      <body className="min-h-screen bg-scroll sm:bg-fixed bg-center bg-cover" style={{ backgroundImage: "url('/gauloi_ziggurat.png')" }} suppressHydrationWarning>
         <div className="min-h-screen bg-pixel-darkblue/85">
           <Providers>
             <Marquee />
             <Header />
-            <main className="max-w-lg mx-auto px-4 py-8">
+            <main className="max-w-lg mx-auto px-3 py-4 sm:px-4 sm:py-8">
               {children}
             </main>
           </Providers>

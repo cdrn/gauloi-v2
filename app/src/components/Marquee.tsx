@@ -10,10 +10,10 @@ export function Marquee() {
   return (
     <div className="bg-teal-600 overflow-hidden whitespace-nowrap">
       <div className="animate-marquee inline-block">
-        <span className="font-pixel text-sm text-navy-900 tracking-widest py-2 inline-block">
+        <span className="font-pixel text-[8px] sm:text-sm text-navy-900 tracking-wider sm:tracking-widest py-1 sm:py-2 inline-block">
           {repeated}
         </span>
-        <span className="font-pixel text-sm text-navy-900 tracking-widest py-2 inline-block">
+        <span className="font-pixel text-[8px] sm:text-sm text-navy-900 tracking-wider sm:tracking-widest py-1 sm:py-2 inline-block">
           {repeated}
         </span>
       </div>

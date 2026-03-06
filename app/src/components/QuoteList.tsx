@@ -55,7 +55,7 @@ export function QuoteList({ quotes, inputAmount, decimals, onSelect }: QuoteList
             onClick={() => onSelect(quote.maker)}
             className="w-full bg-navy-800 border-2 border-navy-600 p-3 text-left hover:border-teal-600 transition-colors"
           >
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center flex-wrap gap-1">
               <div>
                 <span className="text-sm font-bold text-pixel-cyan">
                   {formatAmount(quote.outputAmount, decimals)}

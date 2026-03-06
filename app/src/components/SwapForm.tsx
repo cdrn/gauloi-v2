@@ -198,7 +198,7 @@ export function SwapForm({ initialParams }: SwapFormProps) {
     step === "form";
 
   return (
-    <div className="pixel-border bg-navy-900 p-6 space-y-4">
+    <div className="pixel-border bg-navy-900 p-4 sm:p-6 space-y-4">
       {/* Header */}
       <div className="flex justify-between items-center">
         <h2 className="font-pixel text-sm text-pixel-cyan">
