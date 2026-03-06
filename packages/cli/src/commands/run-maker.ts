@@ -21,19 +21,15 @@ interface RunMakerOptions {
   spreadClean: string;
   spreadUnknown: string;
   maxFill: string;
+  bidirectional?: boolean;
 }
 
-export async function runMaker(options: RunMakerOptions): Promise<void> {
-  if (!options.privateKey) {
-    console.error("Error: --private-key or PRIVATE_KEY env var required");
-    process.exit(1);
-  }
-
-  const account = privateKeyToAccount(options.privateKey as `0x${string}`);
-  const sourceChainId = parseInt(options.sourceChain);
-  const destChainId = parseInt(options.destChain);
-
-  // Build chain configs
+function buildBot(
+  privateKey: `0x${string}`,
+  sourceChainId: number,
+  destChainId: number,
+  options: RunMakerOptions,
+): MakerBot {
   const sourceBase = SUPPORTED_CHAINS[sourceChainId];
   const destBase = SUPPORTED_CHAINS[destChainId];
 
@@ -52,7 +48,6 @@ export async function runMaker(options: RunMakerOptions): Promise<void> {
     rpcUrl: options.destRpc ?? destBase.rpcUrl,
   };
 
-  // Override contract addresses if provided
   if (options.escrow) sourceChain.escrowAddress = options.escrow as `0x${string}`;
   if (options.staking) sourceChain.stakingAddress = options.staking as `0x${string}`;
   if (options.disputes) sourceChain.disputesAddress = options.disputes as `0x${string}`;
@@ -62,30 +57,20 @@ export async function runMaker(options: RunMakerOptions): Promise<void> {
     process.exit(1);
   }
 
-  const sourcePublicClient = getPublicClient(sourceChain);
-  const destPublicClient = getPublicClient(destChain);
-  const sourceWalletClient = getWalletClient(sourceChain, options.privateKey as `0x${string}`);
-  const destWalletClient = getWalletClient(destChain, options.privateKey as `0x${string}`);
+  const account = privateKeyToAccount(privateKey);
 
-  console.log("Starting maker bot...");
-  console.log(`  Maker:        ${account.address}`);
-  console.log(`  Source chain:  ${sourceChain.name} (${sourceChainId})`);
-  console.log(`  Dest chain:    ${destChain.name} (${destChainId})`);
-  console.log(`  Relay:         ${options.relay}`);
-  console.log(`  Escrow:        ${sourceChain.escrowAddress}`);
-  console.log(`  Spread:        ${options.spreadClean} bps (clean), ${options.spreadUnknown} bps (unknown)`);
-  console.log(`  Max fill:      ${options.maxFill} USDC`);
-  console.log(`  Settle every:  ${options.settleInterval}ms`);
+  console.log(`  [${sourceChain.name} → ${destChain.name}]`);
+  console.log(`    Escrow:  ${sourceChain.escrowAddress}`);
 
-  const bot = new MakerBot({
+  return new MakerBot({
     makerAddress: account.address,
     relayUrl: options.relay,
     sourceChain,
     destChain,
-    sourcePublicClient,
-    sourceWalletClient: sourceWalletClient as any,
-    destPublicClient,
-    destWalletClient: destWalletClient as any,
+    sourcePublicClient: getPublicClient(sourceChain),
+    sourceWalletClient: getWalletClient(sourceChain, privateKey) as any,
+    destPublicClient: getPublicClient(destChain),
+    destWalletClient: getWalletClient(destChain, privateKey) as any,
     quoterConfig: {
       spreads: {
         clean: parseInt(options.spreadClean),
@@ -95,20 +80,50 @@ export async function runMaker(options: RunMakerOptions): Promise<void> {
     },
     settleIntervalMs: parseInt(options.settleInterval),
   });
+}
 
-  await bot.start();
+export async function runMaker(options: RunMakerOptions): Promise<void> {
+  if (!options.privateKey) {
+    console.error("Error: --private-key or PRIVATE_KEY env var required");
+    process.exit(1);
+  }
 
-  // Keep alive until SIGINT
-  process.on("SIGINT", () => {
+  const privateKey = options.privateKey as `0x${string}`;
+  const account = privateKeyToAccount(privateKey);
+  const sourceChainId = parseInt(options.sourceChain);
+  const destChainId = parseInt(options.destChain);
+
+  console.log("Starting maker bot...");
+  console.log(`  Maker:        ${account.address}`);
+  console.log(`  Relay:        ${options.relay}`);
+  console.log(`  Spread:       ${options.spreadClean} bps (clean), ${options.spreadUnknown} bps (unknown)`);
+  console.log(`  Max fill:     ${options.maxFill} USDC`);
+  console.log(`  Settle every: ${options.settleInterval}ms`);
+
+  const bots: MakerBot[] = [];
+
+  bots.push(buildBot(privateKey, sourceChainId, destChainId, options));
+
+  if (options.bidirectional) {
+    // Swap source/dest RPCs for the reverse direction
+    const reverseOptions = {
+      ...options,
+      sourceRpc: options.destRpc,
+      destRpc: options.sourceRpc,
+    };
+    bots.push(buildBot(privateKey, destChainId, sourceChainId, reverseOptions));
+  }
+
+  await Promise.all(bots.map((b) => b.start()));
+
+  const shutdown = () => {
     console.log("\nShutting down...");
-    bot.stop();
+    bots.forEach((b) => b.stop());
     process.exit(0);
-  });
+  };
 
-  process.on("SIGTERM", () => {
-    bot.stop();
-    process.exit(0);
-  });
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 
   // Keep the process alive
   await new Promise(() => {});

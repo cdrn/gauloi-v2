@@ -58,6 +58,7 @@ program
   .option("--spread-clean <bps>", "Spread for clean addresses (bps)", "30")
   .option("--spread-unknown <bps>", "Spread for unknown addresses (bps)", "100")
   .option("--max-fill <usdc>", "Maximum fill size in USDC", "10000")
+  .option("--bidirectional", "Run both directions (source→dest and dest→source)")
   .action(runMaker);
 
 program.parse();
