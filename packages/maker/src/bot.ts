@@ -273,6 +273,11 @@ export class MakerBot {
 
     // Submit quote to relay
     const quoteExpiry = Math.floor(Date.now() / 1000) + 300; // 5 min
+
+    // Reserve capacity before yielding — prevents concurrent intents from
+    // both passing the capacity check before either reservation is recorded
+    this.pendingExposure.set(intentId, { amount, expiresAt: quoteExpiry });
+
     const quoteMsg = {
       intentId: intentId as `0x${string}`,
       maker: this.config.makerAddress,
@@ -281,10 +286,14 @@ export class MakerBot {
       expiry: quoteExpiry,
     };
 
-    const signature = await signQuote(this.config.sourceWalletClient, quoteMsg);
-
-    // Reserve capacity locally until quote expires or fill confirms on-chain
-    this.pendingExposure.set(intentId, { amount, expiresAt: quoteExpiry });
+    let signature: `0x${string}`;
+    try {
+      signature = await signQuote(this.config.sourceWalletClient, quoteMsg);
+    } catch (err) {
+      this.pendingExposure.delete(intentId);
+      console.error(`Failed to sign quote for intent ${intentId}:`, err);
+      return;
+    }
 
     console.log(
       `Quoting intent ${intentId}: ${outputAmount} (${screenResult.riskTier})`,
