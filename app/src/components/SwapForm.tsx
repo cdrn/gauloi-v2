@@ -85,7 +85,7 @@ export function SwapForm({ initialParams }: SwapFormProps) {
   } = useTokenAllowance(inputToken, address, sourceChain?.escrowAddress);
 
   const { sign, isPending: isSigning } = useSignOrder();
-  const relay = useRelay({ url: RELAY_URL, enabled: step === "quoting" || step === "accepted" });
+  const relay = useRelay({ url: RELAY_URL });
 
   const handleSign = useCallback(async () => {
     if (!address || !sourceChain || !destChain || !inputToken || !outputToken || !destinationAddress) return;
