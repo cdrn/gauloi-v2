@@ -258,6 +258,11 @@ export class MakerBot {
       takerSignature,
     } = data;
 
+    // Only handle if this intent's source chain matches our source chain
+    if (data.sourceChainId && data.sourceChainId !== this.config.sourceChain.chainId) {
+      return;
+    }
+
     console.log(`Quote accepted for intent ${intentId}, executing order...`);
 
     try {
