@@ -37,4 +37,7 @@ interface IGauloiStaking {
     function stakeToken() external view returns (address);
     function minStake() external view returns (uint256);
     function cooldownPeriod() external view returns (uint256);
+
+    // --- Oracle ---
+    function setPriceFeed(address _priceFeed) external;
 }
