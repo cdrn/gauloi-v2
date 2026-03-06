@@ -55,7 +55,10 @@ export default function StatsPage() {
 
   return (
     <div className="space-y-4">
-      <h2 className="font-pixel text-sm text-pixel-cyan">NETWORK STATS</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="font-pixel text-sm text-pixel-cyan">NETWORK STATS</h2>
+        <span className="font-pixel text-[8px] text-teal-600">LAST 7 DAYS</span>
+      </div>
 
       {/* On-chain aggregate stats */}
       <div className="grid grid-cols-2 gap-3">

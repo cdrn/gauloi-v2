@@ -1,8 +1,15 @@
 import { useEffect, useState } from "react";
 import { usePublicClient } from "wagmi";
-import { formatUnits } from "viem";
 import { GauloiStakingAbi, GauloiEscrowAbi } from "@gauloi/common";
 import { UI_CHAINS } from "@/config/chains";
+
+// Approximate blocks per day: Sepolia ~7200, Arb Sepolia ~86400
+// Use conservative estimates to avoid underfetching
+const BLOCKS_7D: Record<number, bigint> = {
+  11155111: 50_400n,  // Sepolia: ~7200/day * 7
+  421614: 605_000n,   // Arb Sepolia: ~86400/day * 7
+};
+const DEFAULT_BLOCKS_7D = 50_400n;
 
 export interface MakerStake {
   address: string;
@@ -25,70 +32,81 @@ export interface OnChainStats {
 
 async function fetchChainStats(
   publicClient: any,
+  chainId: number,
   stakingAddress: `0x${string}`,
   escrowAddress: `0x${string}`,
 ): Promise<ChainOnChainStats> {
-  // Fetch staked events to discover maker addresses
-  const stakedLogs = await publicClient.getContractEvents({
-    address: stakingAddress,
-    abi: GauloiStakingAbi,
-    eventName: "Staked",
-    fromBlock: 0n,
-  });
+  // Get current block and compute 7-day lookback
+  const currentBlock = await publicClient.getBlockNumber();
+  const lookback = BLOCKS_7D[chainId] ?? DEFAULT_BLOCKS_7D;
+  const fromBlock = currentBlock > lookback ? currentBlock - lookback : 0n;
 
-  // Deduplicate maker addresses from events
+  // Staked events use all-time to discover makers (stakes may be older than 7d)
+  // but we cap to a reasonable range to avoid RPC limits
+  const stakedFromBlock = currentBlock > lookback * 4n ? currentBlock - lookback * 4n : 0n;
+
+  // Fetch events in parallel
+  const [stakedLogs, orderLogs, settledLogs] = await Promise.all([
+    publicClient.getContractEvents({
+      address: stakingAddress,
+      abi: GauloiStakingAbi,
+      eventName: "Staked",
+      fromBlock: stakedFromBlock,
+    }),
+    publicClient.getContractEvents({
+      address: escrowAddress,
+      abi: GauloiEscrowAbi,
+      eventName: "OrderExecuted",
+      fromBlock,
+    }),
+    publicClient.getContractEvents({
+      address: escrowAddress,
+      abi: GauloiEscrowAbi,
+      eventName: "IntentSettled",
+      fromBlock,
+    }),
+  ]);
+
+  // Deduplicate maker addresses from staked events
   const seen = new Set<string>();
   for (const log of stakedLogs) {
     seen.add((log as any).args.maker as string);
   }
   const makerAddresses = Array.from(seen);
 
-  // Fetch current state for each maker
+  // Fetch current on-chain state for each discovered maker
   const makers: MakerStake[] = [];
   let totalStaked = 0n;
 
-  const makerInfos = await Promise.all(
-    makerAddresses.map((addr) =>
-      publicClient.readContract({
-        address: stakingAddress,
-        abi: GauloiStakingAbi,
-        functionName: "getMakerInfo",
-        args: [addr],
-      }),
-    ),
-  );
+  if (makerAddresses.length > 0) {
+    const makerInfos = await Promise.all(
+      makerAddresses.map((addr) =>
+        publicClient.readContract({
+          address: stakingAddress,
+          abi: GauloiStakingAbi,
+          functionName: "getMakerInfo",
+          args: [addr],
+        }),
+      ),
+    );
 
-  for (let i = 0; i < makerAddresses.length; i++) {
-    const info = makerInfos[i] as any;
-    const stakedAmount = info.stakedAmount ?? info[0] ?? 0n;
-    const isActive = info.isActive ?? info[4] ?? false;
+    for (let i = 0; i < makerAddresses.length; i++) {
+      const info = makerInfos[i] as any;
+      const stakedAmount = info.stakedAmount ?? info[0] ?? 0n;
+      const isActive = info.isActive ?? info[4] ?? false;
 
-    if (stakedAmount > 0n) {
-      makers.push({
-        address: makerAddresses[i],
-        stakedAmount: stakedAmount.toString(),
-        isActive,
-      });
-      totalStaked += stakedAmount;
+      if (stakedAmount > 0n) {
+        makers.push({
+          address: makerAddresses[i],
+          stakedAmount: stakedAmount.toString(),
+          isActive,
+        });
+        totalStaked += stakedAmount;
+      }
     }
   }
 
-  // Fetch order and settlement events
-  const [orderLogs, settledLogs] = await Promise.all([
-    publicClient.getContractEvents({
-      address: escrowAddress,
-      abi: GauloiEscrowAbi,
-      eventName: "OrderExecuted",
-      fromBlock: 0n,
-    }),
-    publicClient.getContractEvents({
-      address: escrowAddress,
-      abi: GauloiEscrowAbi,
-      eventName: "IntentSettled",
-      fromBlock: 0n,
-    }),
-  ]);
-
+  // Sum volume from order events
   let volume = 0n;
   for (const log of orderLogs) {
     volume += (log as any).args.inputAmount ?? 0n;
@@ -119,7 +137,7 @@ export function useOnChainStats(intervalMs = 60_000): OnChainStats {
   useEffect(() => {
     let active = true;
 
-    const fetch = async () => {
+    const load = async () => {
       const results: Record<number, ChainOnChainStats> = {};
 
       await Promise.all(
@@ -128,6 +146,7 @@ export function useOnChainStats(intervalMs = 60_000): OnChainStats {
           try {
             results[chain.chainId] = await fetchChainStats(
               client,
+              chain.chainId,
               chain.stakingAddress,
               chain.escrowAddress,
             );
@@ -142,8 +161,8 @@ export function useOnChainStats(intervalMs = 60_000): OnChainStats {
       }
     };
 
-    fetch();
-    const id = setInterval(fetch, intervalMs);
+    load();
+    const id = setInterval(load, intervalMs);
     return () => {
       active = false;
       clearInterval(id);
