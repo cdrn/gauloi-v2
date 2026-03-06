@@ -154,12 +154,13 @@ export function ChainStakeCard({ chain, maker }: ChainStakeCardProps) {
     });
   };
 
-  // Parse maker info
-  const stakedAmount = makerInfo ? (makerInfo as any)[0] as bigint : 0n;
-  const activeExposure = makerInfo ? (makerInfo as any)[1] as bigint : 0n;
-  const unstakeRequestTime = makerInfo ? Number((makerInfo as any)[2] as bigint) : 0;
-  const pendingUnstakeAmount = makerInfo ? (makerInfo as any)[3] as bigint : 0n;
-  const isActive = makerInfo ? (makerInfo as any)[4] as boolean : false;
+  // Parse maker info — getMakerInfo returns undefined if maker never staked
+  const info = makerInfo as readonly [bigint, bigint, bigint, bigint, boolean] | undefined;
+  const stakedAmount = info?.[0] ?? 0n;
+  const activeExposure = info?.[1] ?? 0n;
+  const unstakeRequestTime = Number(info?.[2] ?? 0n);
+  const pendingUnstakeAmount = info?.[3] ?? 0n;
+  const isActive = info?.[4] ?? false;
 
   const availableCapacity = stakedAmount > activeExposure ? stakedAmount - activeExposure : 0n;
   const cooldownSeconds = cooldownRaw ? Number(cooldownRaw) : 0;
