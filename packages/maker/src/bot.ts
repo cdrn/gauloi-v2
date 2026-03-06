@@ -52,6 +52,8 @@ export class MakerBot {
   private disputeWatcher: DisputeWatcher;
   private config: BotConfig;
   private running = false;
+  private cachedCapacity: bigint = 0n;
+  private capacityLastFetched = 0;
 
   constructor(config: BotConfig) {
     this.config = config;
@@ -126,6 +128,8 @@ export class MakerBot {
           data: { address: this.config.makerAddress },
         }),
       );
+      // Backfill: fetch open intents we may have missed
+      this.fetchOpenIntents().catch(() => {});
     });
 
     this.ws.on("message", (raw) => {
@@ -165,6 +169,42 @@ export class MakerBot {
     }
   }
 
+  private async fetchOpenIntents(): Promise<void> {
+    const httpUrl = this.config.relayUrl
+      .replace("wss://", "https://")
+      .replace("ws://", "http://");
+    try {
+      const res = await fetch(`${httpUrl}/intents`);
+      if (!res.ok) return;
+      const intents = await res.json() as any[];
+      const open = intents.filter((i: any) => !i.selectedMaker);
+      if (open.length > 0) {
+        console.log(`Backfilling ${open.length} open intent(s)...`);
+      }
+      for (const intent of open) {
+        await this.handleNewIntent(intent);
+      }
+    } catch {
+      // Non-fatal — we'll still get new intents via WebSocket
+    }
+  }
+
+  private async getCapacity(): Promise<bigint> {
+    const now = Date.now();
+    if (now - this.capacityLastFetched < 15_000) {
+      return this.cachedCapacity;
+    }
+    const capacity = await this.config.sourcePublicClient.readContract({
+      address: this.config.sourceChain.stakingAddress,
+      abi: GauloiStakingAbi,
+      functionName: "availableCapacity",
+      args: [this.config.makerAddress],
+    });
+    this.cachedCapacity = capacity;
+    this.capacityLastFetched = now;
+    return capacity;
+  }
+
   private async handleNewIntent(data: any): Promise<void> {
     const { intentId, taker, inputAmount, destinationChainId } = data;
 
@@ -195,14 +235,9 @@ export class MakerBot {
       return;
     }
 
-    // Check available capacity
+    // Check available capacity (cached for 15s)
     try {
-      const capacity = await this.config.sourcePublicClient.readContract({
-        address: this.config.sourceChain.stakingAddress,
-        abi: GauloiStakingAbi,
-        functionName: "availableCapacity",
-        args: [this.config.makerAddress],
-      });
+      const capacity = await this.getCapacity();
 
       if (capacity < BigInt(inputAmount)) {
         console.log(`Insufficient capacity for intent ${intentId}`);
