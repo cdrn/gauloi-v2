@@ -54,6 +54,9 @@ export class MakerBot {
   private running = false;
   private cachedCapacity: bigint = 0n;
   private capacityLastFetched = 0;
+  // Local pending exposure tracking — prevents over-quoting between on-chain confirmations
+  private pendingExposure: Map<string, { amount: bigint; expiresAt: number }> =
+    new Map();
 
   constructor(config: BotConfig) {
     this.config = config;
@@ -192,6 +195,19 @@ export class MakerBot {
     }
   }
 
+  private getTotalPendingExposure(): bigint {
+    const now = Math.floor(Date.now() / 1000);
+    let total = 0n;
+    for (const [id, entry] of this.pendingExposure) {
+      if (entry.expiresAt <= now) {
+        this.pendingExposure.delete(id);
+      } else {
+        total += entry.amount;
+      }
+    }
+    return total;
+  }
+
   private async getCapacity(): Promise<bigint> {
     const now = Date.now();
     if (now - this.capacityLastFetched < 15_000) {
@@ -238,11 +254,15 @@ export class MakerBot {
       return;
     }
 
-    // Check available capacity (cached for 15s)
+    // Check available capacity accounting for pending (not-yet-on-chain) fills
+    const amount = BigInt(inputAmount);
     try {
-      const capacity = await this.getCapacity();
+      const onChainCapacity = await this.getCapacity();
+      const pending = this.getTotalPendingExposure();
+      const effectiveCapacity =
+        onChainCapacity > pending ? onChainCapacity - pending : 0n;
 
-      if (capacity < BigInt(inputAmount)) {
+      if (effectiveCapacity < amount) {
         console.log(`Insufficient capacity for intent ${intentId}`);
         return;
       }
@@ -262,6 +282,9 @@ export class MakerBot {
     };
 
     const signature = await signQuote(this.config.sourceWalletClient, quoteMsg);
+
+    // Reserve capacity locally until quote expires or fill confirms on-chain
+    this.pendingExposure.set(intentId, { amount, expiresAt: quoteExpiry });
 
     console.log(
       `Quoting intent ${intentId}: ${outputAmount} (${screenResult.riskTier})`,
@@ -321,6 +344,11 @@ export class MakerBot {
       console.log("Executing order on source chain...");
       await this.filler.executeOrder(order, takerSignature as `0x${string}`);
 
+      // On-chain exposure now tracks this fill — release local reservation
+      // and invalidate cache so next capacity check is fresh
+      this.pendingExposure.delete(intentId);
+      this.capacityLastFetched = 0;
+
       // 2. Fill on destination chain
       console.log("Filling on destination chain...");
       const fillTxHash = await this.filler.fillOnDestination(
@@ -344,6 +372,9 @@ export class MakerBot {
 
       console.log(`Fill complete for intent ${intentId}: ${fillTxHash}`);
     } catch (err) {
+      // Release local reservation on failure
+      this.pendingExposure.delete(intentId);
+      this.capacityLastFetched = 0;
       console.error(`Fill failed for intent ${intentId}:`, err);
     }
   }
