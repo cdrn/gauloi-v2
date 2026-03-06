@@ -18,6 +18,11 @@ export const GauloiStakingAbi = [
         "internalType": "uint256"
       },
       {
+        "name": "_stalePriceThreshold",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
         "name": "_owner",
         "type": "address",
         "internalType": "address"
@@ -245,6 +250,32 @@ export const GauloiStakingAbi = [
   },
   {
     "type": "function",
+    "name": "priceFeed",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract AggregatorV3Interface"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "priceFeedDecimals",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "renounceOwnership",
     "inputs": [],
     "outputs": [],
@@ -317,6 +348,19 @@ export const GauloiStakingAbi = [
   },
   {
     "type": "function",
+    "name": "setPriceFeed",
+    "inputs": [
+      {
+        "name": "_priceFeed",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "slash",
     "inputs": [
       {
@@ -374,6 +418,19 @@ export const GauloiStakingAbi = [
         "name": "",
         "type": "address",
         "internalType": "contract IERC20"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "stalePriceThreshold",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
