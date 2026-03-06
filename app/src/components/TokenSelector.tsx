@@ -10,12 +10,14 @@ interface TokenSelectorProps {
 
 export function TokenSelector({ value, onChange }: TokenSelectorProps) {
   return (
-    <div className="flex items-center gap-1">
-      <TokenIcon symbol={value} size={18} />
+    <div className="relative">
+      <div className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none">
+        <TokenIcon symbol={value} size={14} />
+      </div>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="pixel-input text-sm font-pixel text-[10px] text-pixel-cyan"
+        className="pixel-input text-sm font-pixel text-[10px] text-pixel-cyan pl-7 pr-2"
       >
         {Object.entries(SUPPORTED_TOKENS).map(([symbol]) => (
           <option key={symbol} value={symbol}>
