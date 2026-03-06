@@ -53,7 +53,7 @@ contract GasBenchmark is Test {
         maker3 = vm.addr(maker3Key);
 
         usdc = new MockERC20("USD Coin", "USDC", 6);
-        staking = new GauloiStaking(address(usdc), MIN_STAKE, COOLDOWN, owner);
+        staking = new GauloiStaking(address(usdc), MIN_STAKE, COOLDOWN, 1 hours, owner);
         escrow = new GauloiEscrow(address(staking), SETTLEMENT_WINDOW, COMMITMENT_TIMEOUT, owner);
         disputes = new GauloiDisputes(
             address(staking), address(escrow), address(usdc),

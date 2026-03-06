@@ -69,7 +69,7 @@ contract ForkSettlementTest is Test {
         makerC = vm.addr(makerCKey);
 
         // Deploy protocol using USDC as stake token
-        staking = new GauloiStaking(USDC, MIN_STAKE, COOLDOWN, owner);
+        staking = new GauloiStaking(USDC, MIN_STAKE, COOLDOWN, 1 hours, owner);
         escrow = new GauloiEscrow(address(staking), SETTLEMENT_WINDOW, COMMITMENT_TIMEOUT, owner);
         disputes = new GauloiDisputes(
             address(staking), address(escrow), USDC,

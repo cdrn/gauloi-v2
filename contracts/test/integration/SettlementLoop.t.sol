@@ -58,7 +58,7 @@ contract SettlementLoopTest is Test {
         usdt = new MockERC20("Tether USD", "USDT", 6);
 
         // Deploy protocol
-        staking = new GauloiStaking(address(usdc), MIN_STAKE, COOLDOWN, owner);
+        staking = new GauloiStaking(address(usdc), MIN_STAKE, COOLDOWN, 1 hours, owner);
         escrow = new GauloiEscrow(address(staking), SETTLEMENT_WINDOW, COMMITMENT_TIMEOUT, owner);
         disputes = new GauloiDisputes(
             address(staking), address(escrow), address(usdc),

@@ -34,7 +34,7 @@ contract GauloiDisputesTest is BaseTest {
         taker = vm.addr(takerKey);
 
         usdc = new MockERC20Harness("USD Coin", "USDC", 6);
-        staking = new GauloiStaking(address(usdc), MIN_STAKE, COOLDOWN, owner);
+        staking = new GauloiStaking(address(usdc), MIN_STAKE, COOLDOWN, 1 hours, owner);
 
         escrow = new GauloiEscrow(address(staking), SETTLEMENT_WINDOW, COMMITMENT_TIMEOUT, owner);
 

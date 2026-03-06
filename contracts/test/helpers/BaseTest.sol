@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {MockERC20} from "./MockERC20.sol";
+import {MockPriceFeed} from "./MockPriceFeed.sol";
 import {GauloiStaking} from "../../src/GauloiStaking.sol";
 import {GauloiEscrow} from "../../src/GauloiEscrow.sol";
 import {DataTypes} from "../../src/types/DataTypes.sol";
@@ -12,6 +13,7 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 
 abstract contract BaseTest is Test {
     MockERC20 public usdc;
+    MockPriceFeed public priceFeed;
     GauloiStaking public staking;
     GauloiEscrow public escrow;
 
@@ -40,12 +42,18 @@ abstract contract BaseTest is Test {
         taker = vm.addr(takerKey);
 
         usdc = new MockERC20("USD Coin", "USDC", 6);
+        priceFeed = new MockPriceFeed(1e8, 8); // USDC at $1.00, 8 decimals
         staking = new GauloiStaking(
             address(usdc),
             MIN_STAKE,
             COOLDOWN,
+            1 hours,
             owner
         );
+
+        // Set oracle on staking
+        vm.prank(owner);
+        staking.setPriceFeed(address(priceFeed));
 
         // Fund makers and taker
         usdc.mint(maker1, 1_000_000e6);

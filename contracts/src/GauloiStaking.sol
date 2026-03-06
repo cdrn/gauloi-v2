@@ -6,6 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IGauloiStaking} from "./interfaces/IGauloiStaking.sol";
+import {AggregatorV3Interface} from "./interfaces/AggregatorV3Interface.sol";
 import {DataTypes} from "./types/DataTypes.sol";
 
 contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
@@ -14,6 +15,11 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
     IERC20 public immutable stakeTokenContract;
     uint256 public minStakeAmount;
     uint256 public cooldownDuration;
+
+    // Chainlink USDC/USD price feed for oracle-adjusted exposure checks
+    AggregatorV3Interface public priceFeed;
+    uint8 public priceFeedDecimals;
+    uint256 public immutable stalePriceThreshold;
 
     // Authorized callers for permissioned functions
     address public escrow;
@@ -43,12 +49,15 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
         address _stakeToken,
         uint256 _minStake,
         uint256 _cooldownPeriod,
+        uint256 _stalePriceThreshold,
         address _owner
     ) Ownable(_owner) {
         require(_stakeToken != address(0), "GauloiStaking: zero address");
+        require(_stalePriceThreshold > 0, "GauloiStaking: zero threshold");
         stakeTokenContract = IERC20(_stakeToken);
         minStakeAmount = _minStake;
         cooldownDuration = _cooldownPeriod;
+        stalePriceThreshold = _stalePriceThreshold;
     }
 
     // --- Admin ---
@@ -69,6 +78,16 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
 
     function setCooldownPeriod(uint256 _cooldownPeriod) external onlyOwner {
         cooldownDuration = _cooldownPeriod;
+    }
+
+    function setPriceFeed(address _priceFeed) external onlyOwner {
+        if (_priceFeed == address(0)) {
+            priceFeed = AggregatorV3Interface(address(0));
+            priceFeedDecimals = 0;
+        } else {
+            priceFeed = AggregatorV3Interface(_priceFeed);
+            priceFeedDecimals = AggregatorV3Interface(_priceFeed).decimals();
+        }
     }
 
     // --- Maker staking ---
@@ -140,7 +159,8 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
         require(info.isActive, "GauloiStaking: maker not active");
 
         uint256 newExposure = info.activeExposure + amount;
-        require(newExposure <= info.stakedAmount, "GauloiStaking: exposure exceeds stake");
+        uint256 effectiveCapacity = _stakeValueInUsd(info.stakedAmount);
+        require(newExposure <= effectiveCapacity, "GauloiStaking: exposure exceeds stake");
 
         info.activeExposure = newExposure;
     }
@@ -185,7 +205,9 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
     function availableCapacity(address maker) external view returns (uint256) {
         DataTypes.MakerInfo storage info = _makers[maker];
         if (!info.isActive) return 0;
-        return info.stakedAmount - info.activeExposure;
+        uint256 effectiveCapacity = _stakeValueInUsd(info.stakedAmount);
+        if (effectiveCapacity <= info.activeExposure) return 0;
+        return effectiveCapacity - info.activeExposure;
     }
 
     function isActiveMaker(address maker) external view returns (bool) {
@@ -202,5 +224,27 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
 
     function cooldownPeriod() external view returns (uint256) {
         return cooldownDuration;
+    }
+
+    // --- Internal ---
+
+    /// @dev Returns the USD value of a USDC stake amount using the oracle.
+    ///      If no oracle is set, assumes 1:1 (i.e. returns the raw amount).
+    ///      Chainlink USDC/USD feeds use 8 decimals, USDC uses 6.
+    ///      Result is in 6-decimal "USD units" so it can be compared directly to fill amounts.
+    ///      Capped at stakedAmount so oracle can only reduce capacity, never inflate above 1:1.
+    function _stakeValueInUsd(uint256 stakedAmount) internal view returns (uint256) {
+        if (address(priceFeed) == address(0)) {
+            return stakedAmount;
+        }
+
+        (, int256 price,, uint256 updatedAt,) = priceFeed.latestRoundData();
+        require(price > 0, "GauloiStaking: invalid oracle price");
+        require(block.timestamp - updatedAt <= stalePriceThreshold, "GauloiStaking: stale oracle price");
+
+        // stakedAmount (6 decimals) * price (feedDecimals) / 10^feedDecimals = USD value (6 decimals)
+        uint256 oracleValue = (stakedAmount * uint256(price)) / (10 ** priceFeedDecimals);
+        // Cap: oracle can only reduce capacity, never inflate above 1:1
+        return oracleValue < stakedAmount ? oracleValue : stakedAmount;
     }
 }

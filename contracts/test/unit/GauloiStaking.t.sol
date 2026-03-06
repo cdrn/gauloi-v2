@@ -5,6 +5,7 @@ import {BaseTest} from "../helpers/BaseTest.sol";
 import {GauloiStaking} from "../../src/GauloiStaking.sol";
 import {IGauloiStaking} from "../../src/interfaces/IGauloiStaking.sol";
 import {DataTypes} from "../../src/types/DataTypes.sol";
+import {MockPriceFeed} from "../helpers/MockPriceFeed.sol";
 
 contract GauloiStakingTest is BaseTest {
     address public mockEscrow = makeAddr("escrow");
@@ -331,5 +332,129 @@ contract GauloiStakingTest is BaseTest {
         vm.prank(mockEscrow);
         vm.expectRevert("GauloiStaking: exposure exceeds stake");
         staking.increaseExposure(maker1, exposure);
+    }
+
+    // --- Oracle-adjusted exposure ---
+
+    function test_increaseExposure_oracleReducesCapacity() public {
+        _stakeMaker(maker1, 50_000e6);
+
+        // USDC depegs to $0.50
+        priceFeed.setPrice(0.5e8);
+
+        // Stake is worth $25,000 — exposure of 30,000 should fail
+        vm.prank(mockEscrow);
+        vm.expectRevert("GauloiStaking: exposure exceeds stake");
+        staking.increaseExposure(maker1, 30_000e6);
+
+        // But 25,000 should succeed
+        vm.prank(mockEscrow);
+        staking.increaseExposure(maker1, 25_000e6);
+
+        assertEq(staking.getMakerInfo(maker1).activeExposure, 25_000e6);
+    }
+
+    function test_availableCapacity_oracleAdjusted() public {
+        _stakeMaker(maker1, 50_000e6);
+
+        // At $1.00, capacity = 50,000
+        assertEq(staking.availableCapacity(maker1), 50_000e6);
+
+        // USDC depegs to $0.80
+        priceFeed.setPrice(0.8e8);
+        assertEq(staking.availableCapacity(maker1), 40_000e6);
+
+        // Add some exposure
+        vm.prank(mockEscrow);
+        staking.increaseExposure(maker1, 20_000e6);
+        assertEq(staking.availableCapacity(maker1), 20_000e6);
+    }
+
+    function test_increaseExposure_staleOracle_reverts() public {
+        _stakeMaker(maker1, 50_000e6);
+
+        // Warp to a reasonable timestamp, then set oracle updatedAt to 2 hours ago
+        vm.warp(10 hours);
+        priceFeed.setUpdatedAt(block.timestamp - 2 hours);
+
+        vm.prank(mockEscrow);
+        vm.expectRevert("GauloiStaking: stale oracle price");
+        staking.increaseExposure(maker1, 10_000e6);
+    }
+
+    function test_increaseExposure_noPriceFeed_fallsBackTo1to1() public {
+        // Deploy fresh staking without oracle
+        GauloiStaking noOracleStaking = new GauloiStaking(
+            address(usdc), MIN_STAKE, COOLDOWN, 1 hours, owner
+        );
+        vm.startPrank(owner);
+        noOracleStaking.setEscrow(mockEscrow);
+        vm.stopPrank();
+
+        vm.startPrank(maker1);
+        usdc.approve(address(noOracleStaking), 50_000e6);
+        noOracleStaking.stake(50_000e6);
+        vm.stopPrank();
+
+        // Without oracle, 50k stake = 50k capacity (raw 1:1)
+        assertEq(noOracleStaking.availableCapacity(maker1), 50_000e6);
+
+        vm.prank(mockEscrow);
+        noOracleStaking.increaseExposure(maker1, 50_000e6);
+        assertEq(noOracleStaking.availableCapacity(maker1), 0);
+    }
+
+    function test_increaseExposure_negativeOraclePrice_reverts() public {
+        _stakeMaker(maker1, 50_000e6);
+
+        priceFeed.setPrice(-1);
+
+        vm.prank(mockEscrow);
+        vm.expectRevert("GauloiStaking: invalid oracle price");
+        staking.increaseExposure(maker1, 10_000e6);
+    }
+
+    function test_setPriceFeed_onlyOwner() public {
+        vm.prank(maker1);
+        vm.expectRevert();
+        staking.setPriceFeed(makeAddr("feed"));
+    }
+
+    function test_setPriceFeed_zeroAddress_disablesOracle() public {
+        _stakeMaker(maker1, 50_000e6);
+
+        // Disable oracle
+        vm.prank(owner);
+        staking.setPriceFeed(address(0));
+
+        // Should fall back to 1:1
+        assertEq(staking.availableCapacity(maker1), 50_000e6);
+    }
+
+    function test_availableCapacity_cappedAbovePeg() public {
+        _stakeMaker(maker1, 50_000e6);
+
+        // USDC at $1.05 — capacity should still be 50,000 (capped at 1:1)
+        priceFeed.setPrice(1.05e8);
+        assertEq(staking.availableCapacity(maker1), 50_000e6);
+
+        // USDC at $2.00 — still capped
+        priceFeed.setPrice(2e8);
+        assertEq(staking.availableCapacity(maker1), 50_000e6);
+    }
+
+    function testFuzz_oracleAdjustedCapacity(uint256 stakeAmt, uint256 priceCents) public {
+        stakeAmt = bound(stakeAmt, MIN_STAKE, 1_000_000e6);
+        priceCents = bound(priceCents, 1, 200); // $0.01 to $2.00
+
+        _stakeMaker(maker1, stakeAmt);
+
+        int256 oraclePrice = int256(priceCents * 1e6); // 8-decimal price from cents
+        priceFeed.setPrice(oraclePrice);
+
+        uint256 rawCapacity = (stakeAmt * priceCents * 1e6) / 1e8;
+        // Capped at stakedAmount — oracle can only reduce, never inflate
+        uint256 expectedCapacity = rawCapacity < stakeAmt ? rawCapacity : stakeAmt;
+        assertEq(staking.availableCapacity(maker1), expectedCapacity);
     }
 }

@@ -28,6 +28,7 @@ contract Deploy is Script {
             usdc,
             vm.envOr("MIN_STAKE", uint256(10_000e6)),
             vm.envOr("COOLDOWN", uint256(48 hours)),
+            vm.envOr("STALE_PRICE_THRESHOLD", uint256(24 hours)),
             deployer
         );
         console.log("Staking:", address(staking));
