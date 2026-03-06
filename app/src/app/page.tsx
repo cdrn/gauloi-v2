@@ -23,21 +23,7 @@ function SwapPage() {
         }
       : undefined;
 
-  return (
-    <div className="space-y-6">
-      <div className="pixel-border overflow-hidden">
-        <Image
-          src="/gauloi_ziggurat.png"
-          alt="Gauloi Ziggurat"
-          width={512}
-          height={512}
-          className="w-full h-auto"
-          priority
-        />
-      </div>
-      <SwapForm initialParams={initialParams} />
-    </div>
-  );
+  return <SwapForm initialParams={initialParams} />;
 }
 
 export default function Home() {
