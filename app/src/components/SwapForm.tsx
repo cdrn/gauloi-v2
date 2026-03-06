@@ -91,6 +91,7 @@ export function SwapForm({ initialParams }: SwapFormProps) {
   const { state: intentState, label: intentLabel } = useIntentStatus(
     currentIntentId as `0x${string}` | undefined,
     sourceChain?.escrowAddress as `0x${string}` | undefined,
+    sourceChainId ?? undefined,
   );
 
   const handleSign = useCallback(async () => {
