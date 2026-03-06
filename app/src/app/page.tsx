@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { SwapForm, type SwapInitialParams } from "@/components/SwapForm";
 import { Suspense } from "react";
+import Image from "next/image";
 
 function SwapPage() {
   const searchParams = useSearchParams();
@@ -22,7 +23,21 @@ function SwapPage() {
         }
       : undefined;
 
-  return <SwapForm initialParams={initialParams} />;
+  return (
+    <div className="space-y-6">
+      <div className="pixel-border overflow-hidden">
+        <Image
+          src="/gauloi_ziggurat.png"
+          alt="Gauloi Ziggurat"
+          width={512}
+          height={512}
+          className="w-full h-auto"
+          priority
+        />
+      </div>
+      <SwapForm initialParams={initialParams} />
+    </div>
+  );
 }
 
 export default function Home() {
