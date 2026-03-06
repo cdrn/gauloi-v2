@@ -197,6 +197,9 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         // Release escrow to maker
         escrow.resolveValid(intentId, order);
 
+        // Reclaim storage
+        delete _disputeOrders[intentId];
+
         emit ChallengerBondSlashed(disp.challenger, disp.bondAmount);
     }
 
@@ -221,6 +224,9 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         // Refund taker's escrowed funds
         // Exposure is already zeroed by staking.slash()
         escrow.resolveInvalid(intentId, order);
+
+        // Reclaim storage
+        delete _disputeOrders[intentId];
 
         emit ChallengerRewarded(disp.challenger, challengerReward);
     }
