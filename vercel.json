@@ -1,5 +1,5 @@
 {
   "installCommand": "cd .. && pnpm install",
-  "buildCommand": "pnpm build",
+  "buildCommand": "cd .. && pnpm --filter @gauloi/common build && cd app && pnpm build",
   "framework": "nextjs"
 }
