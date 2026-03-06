@@ -22,6 +22,12 @@ Cross-chain stablecoin settlement protocol with maker-level compliance and optim
 - viem for chain interaction
 - Packages: common, relay, maker, cli
 
+### Workflow
+- Track work through GitHub issues. Reference issue numbers in branch names and PR descriptions.
+- Branch naming: `fix/13-dispute-watcher-order`, `feat/12-decentralise-relay`
+- PRs require owner review (@cdrn). Branch protection is on for master.
+- Use `gh issue list --label P0` to find critical work.
+
 ## Architecture
 
 See `plan.md` for full implementation plan and `docs/` for design blog posts.
