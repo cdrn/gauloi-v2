@@ -1,4 +1,4 @@
-import type { ChainConfig } from "../types/chain";
+import type { ChainConfig } from "../types/chain.js";
 
 // Placeholder addresses — filled after deployment
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;

@@ -9,7 +9,7 @@ import {
 } from "viem";
 import { mainnet, arbitrum, sepolia, arbitrumSepolia } from "viem/chains";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
-import type { ChainConfig } from "./types/chain";
+import type { ChainConfig } from "./types/chain.js";
 
 const viemChains: Record<number, Chain> = {
   1: mainnet,

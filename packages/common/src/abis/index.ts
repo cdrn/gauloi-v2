@@ -1,3 +1,3 @@
-export { GauloiStakingAbi } from "./GauloiStaking";
-export { GauloiEscrowAbi } from "./GauloiEscrow";
-export { GauloiDisputesAbi } from "./GauloiDisputes";
+export { GauloiStakingAbi } from "./GauloiStaking.js";
+export { GauloiEscrowAbi } from "./GauloiEscrow.js";
+export { GauloiDisputesAbi } from "./GauloiDisputes.js";
