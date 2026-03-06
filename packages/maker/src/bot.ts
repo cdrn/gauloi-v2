@@ -57,6 +57,8 @@ export class MakerBot {
   // Local pending exposure tracking — prevents over-quoting between on-chain confirmations
   private pendingExposure: Map<string, { amount: bigint; expiresAt: number }> =
     new Map();
+  // Cache orders by intentId for fill verification and dispute submission
+  private orderCache = new Map<string, Order>();
 
   constructor(config: BotConfig) {
     this.config = config;
@@ -102,10 +104,11 @@ export class MakerBot {
 
     // Start watching fills for dispute monitoring
     this.chainWatcher.watchFills(async (event) => {
-      const valid = await this.disputeWatcher.verifyFill(event);
+      const order = this.orderCache.get(event.intentId);
+      const valid = await this.disputeWatcher.verifyFill(event, order);
       if (!valid) {
         console.log(`Invalid fill detected: ${event.intentId}`);
-        await this.disputeWatcher.dispute(event.intentId);
+        await this.disputeWatcher.dispute(event.intentId, order);
       }
     });
 
@@ -349,6 +352,9 @@ export class MakerBot {
         nonce: BigInt(nonce),
       };
 
+      // Cache order for fill verification and dispute submission
+      this.orderCache.set(intentId, order);
+
       // 1. Execute order on source chain (replaces commitToIntent)
       console.log("Executing order on source chain...");
       await this.filler.executeOrder(order, takerSignature as `0x${string}`);
@@ -383,6 +389,7 @@ export class MakerBot {
     } catch (err) {
       // Release local reservation on failure
       this.pendingExposure.delete(intentId);
+      this.orderCache.delete(intentId);
       this.capacityLastFetched = 0;
       console.error(`Fill failed for intent ${intentId}:`, err);
     }

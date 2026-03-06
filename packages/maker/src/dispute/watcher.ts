@@ -3,15 +3,20 @@ import {
   type WalletClient,
   type Transport,
   type Chain,
+  parseAbiItem,
+  decodeEventLog,
 } from "viem";
 import { type PrivateKeyAccount } from "viem/accounts";
 import { GauloiDisputesAbi, type Order } from "@gauloi/common";
 import type { FillSubmittedEvent } from "../chain/watcher.js";
 
+const ERC20_TRANSFER_EVENT = parseAbiItem(
+  "event Transfer(address indexed from, address indexed to, uint256 value)",
+);
+
 /**
  * Monitors fills and disputes invalid ones.
- * For v0.1, verification is simulated — in production this
- * would check the destination chain RPC for the claimed tx.
+ * Verifies destination chain ERC20 Transfer logs match intent parameters.
  */
 export class DisputeWatcher {
   constructor(
@@ -22,24 +27,63 @@ export class DisputeWatcher {
   ) {}
 
   /**
-   * Verify a fill by checking the destination chain for the claimed transaction.
+   * Verify a fill by checking the destination chain tx receipt for a matching
+   * ERC20 Transfer log (correct token, recipient, and amount).
    * Returns true if the fill is valid.
    */
-  async verifyFill(event: FillSubmittedEvent): Promise<boolean> {
+  async verifyFill(event: FillSubmittedEvent, order?: Order): Promise<boolean> {
     // Don't verify our own fills
     if (event.maker.toLowerCase() === this.makerAddress.toLowerCase()) {
       return true;
     }
 
+    if (!order) {
+      console.warn(`No order data for intent ${event.intentId} — cannot verify fill`);
+      return false;
+    }
+
     try {
-      // Check if the transaction exists on the destination chain
-      const tx = await this.destPublicClient.getTransaction({
+      const receipt = await this.destPublicClient.getTransactionReceipt({
         hash: event.fillTxHash,
       });
 
-      // Transaction exists — basic validity check
-      // In production: verify recipient, amount, token match the intent parameters
-      return tx !== null;
+      if (receipt.status === "reverted") {
+        return false;
+      }
+
+      // Look for an ERC20 Transfer log on the output token contract
+      // that sends at least minOutputAmount to the destination address
+      for (const log of receipt.logs) {
+        // Skip logs from other contracts
+        if (log.address.toLowerCase() !== order.outputToken.toLowerCase()) {
+          continue;
+        }
+
+        try {
+          const decoded = decodeEventLog({
+            abi: [ERC20_TRANSFER_EVENT],
+            data: log.data,
+            topics: log.topics,
+          });
+
+          if (decoded.eventName !== "Transfer") continue;
+
+          const { to, value } = decoded.args;
+
+          const recipientMatch =
+            to.toLowerCase() === order.destinationAddress.toLowerCase();
+          const amountSufficient = value >= order.minOutputAmount;
+
+          if (recipientMatch && amountSufficient) {
+            return true;
+          }
+        } catch {
+          // Not a Transfer event or wrong ABI — skip
+        }
+      }
+
+      // No matching Transfer log found
+      return false;
     } catch {
       // Transaction not found — potentially fraudulent
       return false;
