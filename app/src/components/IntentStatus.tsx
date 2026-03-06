@@ -2,6 +2,7 @@
 
 import { useIntentStatus } from "@/hooks/useIntentStatus";
 import { SUPPORTED_CHAINS, IntentState } from "@gauloi/common";
+import { CopyableAddress } from "./CopyableAddress";
 
 interface IntentStatusProps {
   intentId: `0x${string}`;
@@ -41,9 +42,12 @@ export function IntentStatus({
           <p className="text-xs text-teal-600 mt-2 font-mono">
             {sourceName} &rarr; {destName}
           </p>
-          <p className="text-[10px] text-navy-600 mt-1 font-mono truncate">
-            {intentId.slice(0, 10)}...{intentId.slice(-8)}
-          </p>
+          <div className="mt-1">
+            <CopyableAddress
+              address={intentId}
+              className="text-[10px] text-teal-600/60 font-mono"
+            />
+          </div>
         </div>
         <div className="flex flex-col items-end gap-2 shrink-0">
           <span

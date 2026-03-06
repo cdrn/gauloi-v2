@@ -1,5 +1,7 @@
 "use client";
 
+import { CopyableAddress } from "./CopyableAddress";
+
 interface Quote {
   intentId: string;
   maker: string;
@@ -19,10 +21,6 @@ interface QuoteListProps {
 function formatAmount(raw: string, decimals: number): string {
   const n = Number(raw) / 10 ** decimals;
   return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function truncateAddress(addr: string): string {
-  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
 export function QuoteList({ quotes, inputAmount, decimals, onSelect }: QuoteListProps) {
@@ -64,8 +62,8 @@ export function QuoteList({ quotes, inputAmount, decimals, onSelect }: QuoteList
                   {spread.toFixed(1)} bps
                 </span>
               </div>
-              <div className="text-[10px] text-teal-600 font-mono">
-                {truncateAddress(quote.maker)} | ~{quote.estimatedFillTime}s
+              <div className="text-[10px] text-teal-600 font-mono flex items-center gap-1">
+                <CopyableAddress address={quote.maker} className="text-teal-600" /> | ~{quote.estimatedFillTime}s
               </div>
             </div>
           </button>

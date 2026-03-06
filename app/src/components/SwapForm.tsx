@@ -12,6 +12,7 @@ import { useSignOrder } from "@/hooks/useSignOrder";
 import { useRelay } from "@/hooks/useRelay";
 import { useIntentStatus } from "@/hooks/useIntentStatus";
 import { useNetworkStats } from "@/hooks/useNetworkStats";
+import { CopyableAddress } from "./CopyableAddress";
 
 type SwapStep = "form" | "approving" | "signing" | "quoting" | "accepted";
 
@@ -26,10 +27,6 @@ export interface SwapInitialParams {
 
 interface SwapFormProps {
   initialParams?: SwapInitialParams;
-}
-
-function truncateAddress(addr: string): string {
-  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
 export function SwapForm({ initialParams }: SwapFormProps) {
@@ -219,7 +216,7 @@ export function SwapForm({ initialParams }: SwapFormProps) {
         <div className="border-2 border-amber-400 bg-navy-800 p-3">
           <p className="font-pixel text-[8px] text-amber-400 leading-relaxed">
             SEND {amount} {inputSymbol} TO{" "}
-            <span className="text-pixel-cyan">{truncateAddress(initialParams!.recipient!)}</span>{" "}
+            <CopyableAddress address={initialParams!.recipient!} className="text-pixel-cyan inline-flex" />{" "}
             ON {destChain.name.toUpperCase()}
           </p>
         </div>
@@ -276,7 +273,11 @@ export function SwapForm({ initialParams }: SwapFormProps) {
       {/* Arrow / swap button */}
       <div className="flex justify-center -my-1">
         {isPaymentRequest ? (
-          <div className="font-pixel text-teal-600 text-lg">V</div>
+          <div className="text-teal-600">
+            <svg viewBox="0 0 24 24" fill="none" className="w-6 h-6">
+              <path d="M7 10l5 5 5-5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square" />
+            </svg>
+          </div>
         ) : (
           <button
             type="button"
@@ -288,9 +289,11 @@ export function SwapForm({ initialParams }: SwapFormProps) {
               setInputSymbol(outputSymbol);
               setOutputSymbol(tmpToken);
             }}
-            className="font-pixel text-teal-600 text-lg hover:text-teal-400 transition-colors"
+            className="text-teal-600 hover:text-teal-400 transition-colors"
           >
-            V
+            <svg viewBox="0 0 24 24" fill="none" className="w-6 h-6">
+              <path d="M7 10l5 5 5-5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square" />
+            </svg>
           </button>
         )}
       </div>
@@ -318,7 +321,7 @@ export function SwapForm({ initialParams }: SwapFormProps) {
         <div>
           <label className="block font-pixel text-[8px] text-teal-600 uppercase tracking-widest mb-2">Recipient</label>
           <div className="w-full pixel-input text-xs opacity-60 break-all">
-            {initialParams!.recipient}
+            <CopyableAddress address={initialParams!.recipient!} truncate={false} className="text-inherit" />
           </div>
         </div>
       )}
