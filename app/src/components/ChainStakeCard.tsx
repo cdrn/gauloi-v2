@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   useReadContract,
   useWriteContract,
@@ -11,6 +11,8 @@ import {
 import { erc20Abi, formatUnits, parseUnits } from "viem";
 import { GauloiStakingAbi, type ChainConfig } from "@gauloi/common";
 import { ChainIcon } from "./icons";
+
+const POLL_INTERVAL = 10_000;
 
 interface ChainStakeCardProps {
   chain: ChainConfig;
@@ -23,16 +25,18 @@ export function ChainStakeCard({ chain, maker }: ChainStakeCardProps) {
   const [stakeAmount, setStakeAmount] = useState("");
   const [unstakeAmount, setUnstakeAmount] = useState("");
   const [action, setAction] = useState<"idle" | "approving" | "staking" | "requesting_unstake" | "completing_unstake">("idle");
+  const pendingStakeRef = useRef("");
 
   const wrongChain = walletChainId !== chain.chainId;
 
-  // Read staking state
+  // Read staking state (polls every 10s)
   const { data: makerInfo, refetch: refetchMakerInfo } = useReadContract({
     address: chain.stakingAddress as `0x${string}`,
     abi: GauloiStakingAbi,
     functionName: "getMakerInfo",
     args: [maker],
     chainId: chain.chainId,
+    query: { refetchInterval: POLL_INTERVAL },
   });
 
   const { data: stakeTokenAddr } = useReadContract({
@@ -63,7 +67,7 @@ export function ChainStakeCard({ chain, maker }: ChainStakeCardProps) {
     functionName: "balanceOf",
     args: [maker],
     chainId: chain.chainId,
-    query: { enabled: !!stakeTokenAddr },
+    query: { enabled: !!stakeTokenAddr, refetchInterval: POLL_INTERVAL },
   });
 
   // Read current allowance
@@ -86,31 +90,36 @@ export function ChainStakeCard({ chain, maker }: ChainStakeCardProps) {
 
     if (action === "approving") {
       // Approval done, now stake
-      const parsed = parseUnits(stakeAmount, 6);
-      setAction("staking");
+      const parsed = parseUnits(pendingStakeRef.current, 6);
       resetTx();
-      writeContract({
-        address: chain.stakingAddress as `0x${string}`,
-        abi: GauloiStakingAbi,
-        functionName: "stake",
-        args: [parsed],
-      });
+      setTimeout(() => {
+        setAction("staking");
+        writeContract({
+          address: chain.stakingAddress as `0x${string}`,
+          abi: GauloiStakingAbi,
+          functionName: "stake",
+          args: [parsed],
+        });
+      }, 100);
       return;
     }
 
-    // Any other action completed
+    // Any other action completed — refetch after a short delay for chain finality
+    resetTx();
     setAction("idle");
     setStakeAmount("");
     setUnstakeAmount("");
-    resetTx();
-    refetchMakerInfo();
-    refetchBalance();
-    refetchAllowance();
-  }, [txConfirmed]);
+    setTimeout(() => {
+      refetchMakerInfo();
+      refetchBalance();
+      refetchAllowance();
+    }, 2000);
+  }, [txConfirmed, action]);
 
   const handleStake = () => {
     if (!stakeAmount || wrongChain) return;
     const parsed = parseUnits(stakeAmount, 6);
+    pendingStakeRef.current = stakeAmount;
 
     const currentAllowance = allowance ?? 0n;
     if (currentAllowance < parsed) {
