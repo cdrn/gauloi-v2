@@ -14,16 +14,27 @@ export function startRelayServer(options: RelayServerOptions): {
   const relay = new Relay();
 
   const server = createServer((req, res) => {
-    // Simple HTTP endpoints for debugging
+    const cors: Record<string, string> = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, cors);
+      res.end();
+      return;
+    }
+
     if (req.method === "GET" && req.url === "/health") {
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, { ...cors, "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "ok" }));
       return;
     }
 
     if (req.method === "GET" && req.url === "/intents") {
       const intents = relay.getStore().getOpenIntents();
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, { ...cors, "Content-Type": "application/json" });
       res.end(
         JSON.stringify(
           intents.map((s) => ({
@@ -36,7 +47,7 @@ export function startRelayServer(options: RelayServerOptions): {
       return;
     }
 
-    res.writeHead(404);
+    res.writeHead(404, cors);
     res.end("Not found");
   });
 
