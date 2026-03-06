@@ -11,6 +11,7 @@ import { useTokenAllowance } from "@/hooks/useTokenAllowance";
 import { useSignOrder } from "@/hooks/useSignOrder";
 import { useRelay } from "@/hooks/useRelay";
 import { useIntentStatus } from "@/hooks/useIntentStatus";
+import { useNetworkStats } from "@/hooks/useNetworkStats";
 
 type SwapStep = "form" | "approving" | "signing" | "quoting" | "accepted";
 
@@ -87,6 +88,7 @@ export function SwapForm({ initialParams }: SwapFormProps) {
 
   const { sign, isPending: isSigning } = useSignOrder();
   const relay = useRelay({ url: RELAY_URL });
+  const networkStats = useNetworkStats();
 
   const { state: intentState, label: intentLabel } = useIntentStatus(
     currentIntentId as `0x${string}` | undefined,
@@ -229,6 +231,7 @@ export function SwapForm({ initialParams }: SwapFormProps) {
         value={sourceChainId}
         onChange={setSourceChainId}
         exclude={destChainId}
+        makerCount={sourceChainId ? networkStats?.makers[String(sourceChainId)]?.count : undefined}
       />
 
       {/* Input amount + token */}
@@ -306,6 +309,7 @@ export function SwapForm({ initialParams }: SwapFormProps) {
           value={destChainId}
           onChange={setDestChainId}
           exclude={sourceChainId}
+          makerCount={destChainId ? networkStats?.makers[String(destChainId)]?.count : undefined}
         />
       )}
 

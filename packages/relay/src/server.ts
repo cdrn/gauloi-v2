@@ -56,6 +56,13 @@ export function startRelayServer(options: RelayServerOptions): {
       return;
     }
 
+    if (req.method === "GET" && req.url === "/stats") {
+      const stats = relay.getStats();
+      res.writeHead(200, { ...cors, "Content-Type": "application/json" });
+      res.end(JSON.stringify(stats));
+      return;
+    }
+
     if (req.method === "GET" && req.url === "/intents") {
       const intents = relay.getStore().getOpenIntents();
       res.writeHead(200, { ...cors, "Content-Type": "application/json" });

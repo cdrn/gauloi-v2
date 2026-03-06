@@ -90,6 +90,7 @@ export interface MakerSubscribeMessage {
   type: MessageType.MakerSubscribe;
   data: {
     address: string;
+    chains?: number[];
   };
 }
 

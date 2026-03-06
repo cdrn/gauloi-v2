@@ -125,7 +125,10 @@ export class MakerBot {
       this.ws!.send(
         JSON.stringify({
           type: MessageType.MakerSubscribe,
-          data: { address: this.config.makerAddress },
+          data: {
+            address: this.config.makerAddress,
+            chains: [this.config.sourceChain.chainId, this.config.destChain.chainId],
+          },
         }),
       );
       // Backfill: fetch open intents we may have missed

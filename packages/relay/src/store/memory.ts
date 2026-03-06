@@ -51,6 +51,26 @@ export class MemoryStore {
     );
   }
 
+  getIntentStats(): { total: number; open: number; filled: number; volume: string } {
+    let total = 0;
+    let open = 0;
+    let filled = 0;
+    let volume = 0n;
+
+    const now = Date.now() / 1000;
+    for (const stored of this.intents.values()) {
+      total++;
+      volume += BigInt(stored.intent.inputAmount);
+      if (stored.selectedMaker) {
+        filled++;
+      } else if (stored.intent.expiry > now) {
+        open++;
+      }
+    }
+
+    return { total, open, filled, volume: volume.toString() };
+  }
+
   // Clean up expired intents periodically
   pruneExpired(): number {
     const now = Date.now() / 1000;

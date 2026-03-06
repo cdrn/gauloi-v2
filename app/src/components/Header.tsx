@@ -80,6 +80,7 @@ export function Header() {
         {navLink("/", "Swap")}
         {navLink("/request", "Request")}
         {navLink("/activity", "Activity")}
+        {navLink("/stats", "Stats")}
         {navLink("/maker", "Maker")}
       </nav>
     </header>

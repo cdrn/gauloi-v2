@@ -14,6 +14,7 @@ interface ConnectedClient {
   ws: WebSocket;
   role: "maker" | "taker" | "unknown";
   address?: string;
+  chains?: number[];
 }
 
 export class Relay {
@@ -62,6 +63,7 @@ export class Relay {
       case MessageType.MakerSubscribe:
         client.role = "maker";
         client.address = (msg as MakerSubscribeMessage).data?.address;
+        client.chains = (msg as MakerSubscribeMessage).data?.chains;
         break;
 
       case MessageType.IntentBroadcast:
@@ -208,5 +210,42 @@ export class Relay {
   // Expose store for HTTP endpoints
   getStore(): MemoryStore {
     return this.store;
+  }
+
+  getStats(): {
+    makers: Record<string, { count: number; addresses: string[] }>;
+    intents: { total: number; open: number; filled: number; volume: string };
+  } {
+    const makers: Record<string, { count: number; addresses: string[] }> = {};
+
+    for (const c of this.clients) {
+      if (c.role === "maker" && c.address && c.ws.readyState === WebSocket.OPEN) {
+        const chainIds = c.chains ?? [];
+        for (const chainId of chainIds) {
+          const key = String(chainId);
+          if (!makers[key]) {
+            makers[key] = { count: 0, addresses: [] };
+          }
+          if (!makers[key].addresses.includes(c.address)) {
+            makers[key].addresses.push(c.address);
+            makers[key].count++;
+          }
+        }
+        // If no chains reported, still count the maker under "unknown"
+        if (chainIds.length === 0) {
+          if (!makers["0"]) {
+            makers["0"] = { count: 0, addresses: [] };
+          }
+          if (!makers["0"].addresses.includes(c.address)) {
+            makers["0"].addresses.push(c.address);
+            makers["0"].count++;
+          }
+        }
+      }
+    }
+
+    const intents = this.store.getIntentStats();
+
+    return { makers, intents };
   }
 }
