@@ -361,6 +361,91 @@ contract GauloiDisputesTest is BaseTest {
         disputes.finalizeExpiredDispute(intentId);
     }
 
+    function test_resolveDispute_fillValid_cleansOrderStorage() public {
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        bytes memory sig = _signAttestation(
+            maker3Key, intentId, true, commitment.fillTxHash, order.destinationChainId
+        );
+
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = sig;
+
+        disputes.resolveDispute(intentId, true, sigs);
+
+        // _disputeOrders should be zeroed — verify via storage read
+        // Slot for mapping(bytes32 => Order) at storage slot 9 (_disputeOrders)
+        // keccak256(abi.encode(intentId, 9)) gives the base slot for the Order struct
+        bytes32 baseSlot = keccak256(abi.encode(intentId, uint256(8)));
+        // First field of Order is `taker` (address)
+        bytes32 takerSlot = vm.load(address(disputes), baseSlot);
+        assertEq(takerSlot, bytes32(0), "disputeOrders.taker should be zeroed after resolution");
+
+        // _disputes should still be preserved for audit trail
+        DataTypes.Dispute memory disp = disputes.getDispute(intentId);
+        assertTrue(disp.resolved);
+        assertTrue(disp.fillDeemedValid);
+        assertEq(disp.challenger, maker2Addr);
+    }
+
+    function test_resolveDispute_fillInvalid_cleansOrderStorage() public {
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        bytes memory sig = _signAttestation(
+            maker3Key, intentId, false, commitment.fillTxHash, order.destinationChainId
+        );
+
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = sig;
+
+        disputes.resolveDispute(intentId, false, sigs);
+
+        // _disputeOrders should be zeroed
+        bytes32 baseSlot = keccak256(abi.encode(intentId, uint256(8)));
+        bytes32 takerSlot = vm.load(address(disputes), baseSlot);
+        assertEq(takerSlot, bytes32(0), "disputeOrders.taker should be zeroed after resolution");
+
+        // _disputes preserved
+        DataTypes.Dispute memory disp = disputes.getDispute(intentId);
+        assertTrue(disp.resolved);
+        assertFalse(disp.fillDeemedValid);
+    }
+
+    function test_finalizeExpiredDispute_cleansOrderStorage() public {
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + RESOLUTION_WINDOW + 1);
+
+        disputes.finalizeExpiredDispute(intentId);
+
+        // _disputeOrders should be zeroed
+        bytes32 baseSlot = keccak256(abi.encode(intentId, uint256(8)));
+        bytes32 takerSlot = vm.load(address(disputes), baseSlot);
+        assertEq(takerSlot, bytes32(0), "disputeOrders.taker should be zeroed after expiry resolution");
+
+        // _disputes preserved
+        DataTypes.Dispute memory disp = disputes.getDispute(intentId);
+        assertTrue(disp.resolved);
+        assertTrue(disp.fillDeemedValid);
+    }
+
     function test_resolveDispute_afterDeadline_reverts() public {
         (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
         DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
