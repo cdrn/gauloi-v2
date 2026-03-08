@@ -265,6 +265,10 @@ export class MakerBot {
       const effectiveCapacity =
         onChainCapacity > pending ? onChainCapacity - pending : 0n;
 
+      console.log(
+        `Capacity check for ${intentId}: onChain=${onChainCapacity} pending=${pending} effective=${effectiveCapacity} required=${amount}`,
+      );
+
       if (effectiveCapacity < amount) {
         console.log(`Insufficient capacity for intent ${intentId}`);
         return;
