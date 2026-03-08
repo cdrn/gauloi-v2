@@ -78,4 +78,16 @@ See `script/Deploy.s.sol` for configurable parameters (MIN_STAKE, SETTLEMENT_WIN
 | Eth Sepolia | `0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E` |
 | Arbitrum Sepolia | `0x0153002d20B96532C639313c2d54c3dA09109309` |
 
-Stale price threshold: 24 hours. Min stake: 1 USDC.
+### Testnet Parameters (current deploy)
+
+| Parameter | Value |
+|---|---|
+| Settlement window | 15 minutes |
+| Commitment timeout | 5 minutes |
+| Min stake | 1 USDC |
+| Unstake cooldown | 48 hours |
+| Dispute resolution window | 24 hours |
+| Dispute bond | max(0.5% of fill, 25 USDC) |
+| Stale price threshold | 24 hours |
+
+See `plan.md` for production target values.
