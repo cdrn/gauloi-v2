@@ -9,6 +9,7 @@ interface IGauloiStaking {
     event UnstakeRequested(address indexed maker, uint256 amount, uint256 availableAt);
     event Unstaked(address indexed maker, uint256 amount);
     event Slashed(address indexed maker, uint256 amount, bytes32 indexed intentId);
+    event PriceFeedUpdated(address indexed oldFeed, address indexed newFeed);
 
     // Maker joins by staking USDC
     function stake(uint256 amount) external;

@@ -81,6 +81,7 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
     }
 
     function setPriceFeed(address _priceFeed) external onlyOwner {
+        address oldFeed = address(priceFeed);
         if (_priceFeed == address(0)) {
             priceFeed = AggregatorV3Interface(address(0));
             priceFeedDecimals = 0;
@@ -88,6 +89,7 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
             priceFeed = AggregatorV3Interface(_priceFeed);
             priceFeedDecimals = AggregatorV3Interface(_priceFeed).decimals();
         }
+        emit PriceFeedUpdated(oldFeed, _priceFeed);
     }
 
     // --- Maker staking ---
