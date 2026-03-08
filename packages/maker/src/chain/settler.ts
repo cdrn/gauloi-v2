@@ -74,9 +74,9 @@ export class Settler {
           matured.push(pending);
         }
 
-        // Remove settled/expired intents from tracking
-        // Settled = 2, Expired = 4
-        if (commitment.state === 2 || commitment.state === 4) {
+        // Remove terminal intents from tracking
+        // Settled = 2, Disputed = 3, Expired = 4
+        if (commitment.state === 2 || commitment.state === 3 || commitment.state === 4) {
           this.pendingIntents.delete(intentId);
         }
       } catch {
