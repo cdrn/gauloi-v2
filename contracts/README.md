@@ -31,3 +31,32 @@ forge script script/Deploy.s.sol:Deploy --rpc-url sepolia --broadcast --verify
 ```
 
 See `script/Deploy.s.sol` for configurable parameters (MIN_STAKE, SETTLEMENT_WINDOW, etc.).
+
+## Deployed Addresses
+
+### Eth Sepolia (11155111)
+
+| Contract | Address |
+|---|---|
+| USDC | `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` |
+| Staking | `0x363531686E6a0B1A52189bE878038075B14cBCcB` |
+| Escrow | `0x4A01bc51DF2c58C9fCad0413B3417a47bADE0e52` |
+| Disputes | `0x49CFF580Ad8A15B82a22f9376e65Dc9CebFEc94a` |
+
+### Arbitrum Sepolia (421614)
+
+| Contract | Address |
+|---|---|
+| USDC | `0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d` |
+| Staking | `0x61bc65601290bD7CBfF2461a1C2B81d0892064Dd` |
+| Escrow | `0xf9fFa89F4B3d3b63c389D91B06D805534BcE9256` |
+| Disputes | `0x9938386603295918D6A4167839297fCB46FaF3E1` |
+
+### Chainlink Price Feeds (USDC/USD)
+
+| Chain | Feed Address |
+|---|---|
+| Eth Sepolia | `0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E` |
+| Arbitrum Sepolia | `0x0153002d20B96532C639313c2d54c3dA09109309` |
+
+Stale price threshold: 24 hours. Min stake: 1 USDC.
