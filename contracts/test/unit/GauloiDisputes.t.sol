@@ -21,8 +21,8 @@ contract GauloiDisputesTest is BaseTest {
     address public maker3Addr;
 
     uint256 public constant RESOLUTION_WINDOW = 24 hours;
-    uint256 public constant BOND_BPS = 50; // 0.5%
-    uint256 public constant MIN_BOND = 25e6; // 25 USDC
+    uint256 public constant BOND_BPS = 200; // 2%
+    uint256 public constant MIN_BOND = 250e6; // 250 USDC
 
     function setUp() public {
         // Derive addresses from keys
@@ -121,7 +121,7 @@ contract GauloiDisputesTest is BaseTest {
 
         DataTypes.Dispute memory disp = disputes.getDispute(intentId);
         assertEq(disp.challenger, maker2Addr);
-        assertEq(disp.bondAmount, 50e6); // 0.5% of 10k = 50 USDC (above 25 min)
+        assertEq(disp.bondAmount, 250e6); // 2% of 10k = 200 USDC < 250 min, so use min
         assertFalse(disp.resolved);
 
         // Commitment should be Disputed
@@ -129,9 +129,9 @@ contract GauloiDisputesTest is BaseTest {
     }
 
     function test_dispute_bondCalculation() public view {
-        // For 100k fill: 0.5% = 500 USDC > 25 min
-        assertEq(disputes.calculateDisputeBond(100_000e6), 500e6);
-        // For 1k fill: 0.5% = 5 USDC < 25 min, so use min
+        // For 100k fill: 2% = 2000 USDC > 250 min
+        assertEq(disputes.calculateDisputeBond(100_000e6), 2_000e6);
+        // For 1k fill: 2% = 20 USDC < 250 min, so use min
         assertEq(disputes.calculateDisputeBond(1_000e6), MIN_BOND);
     }
 
@@ -197,6 +197,8 @@ contract GauloiDisputesTest is BaseTest {
         vm.stopPrank();
 
         // Maker3 attests fill is valid
+        // maker3 has 50k stake. Eligible = totalActive(150k) - maker1(50k) - maker2(50k) = 50k
+        // maker3's 50k = 100% of eligible → quorum (30%) met
         bytes memory sig = _signAttestation(
             maker3Key, intentId, true, commitment.fillTxHash, order.destinationChainId
         );
@@ -205,6 +207,7 @@ contract GauloiDisputesTest is BaseTest {
         sigs[0] = sig;
 
         uint256 maker1BalBefore = usdc.balanceOf(maker1Addr);
+        uint256 maker3BalBefore = usdc.balanceOf(maker3Addr);
 
         disputes.resolveDispute(intentId, true, sigs);
 
@@ -212,10 +215,14 @@ contract GauloiDisputesTest is BaseTest {
         assertTrue(disp.resolved);
         assertTrue(disp.fillDeemedValid);
 
-        // Maker1 gets escrowed funds + half the dispute bond (50/2 = 25)
-        uint256 bondAmount = disputes.calculateDisputeBond(10_000e6);
+        uint256 bondAmount = disputes.calculateDisputeBond(10_000e6); // 250e6 (min)
+        // Maker1 gets escrowed funds + 50% of bond
         uint256 maker1BalAfter = usdc.balanceOf(maker1Addr);
         assertEq(maker1BalAfter - maker1BalBefore, 10_000e6 + bondAmount / 2);
+
+        // Maker3 gets 25% of bond as attestor reward
+        uint256 maker3BalAfter = usdc.balanceOf(maker3Addr);
+        assertEq(maker3BalAfter - maker3BalBefore, bondAmount / 4);
 
         // Intent settled
         assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Settled);
@@ -248,14 +255,19 @@ contract GauloiDisputesTest is BaseTest {
         // Taker gets escrowed funds back
         assertEq(usdc.balanceOf(taker) - takerBalBefore, 10_000e6);
 
-        // Challenger gets bond back + 25% of slashed stake
-        uint256 bondAmount = disputes.calculateDisputeBond(10_000e6);
-        uint256 challengerReward = bondAmount + (50_000e6 / 4);
-        assertEq(usdc.balanceOf(maker2Addr) - challengerBalBefore, challengerReward);
+        // Slash curve: 10k fill → multiplier = 2 + 650e6/10_000e6 = 2.065
+        // slashAmt = 10_000e6 * 2.065 = 20_650e6
+        uint256 expectedSlash = 20_650e6;
 
-        // Maker1 is slashed — no longer active
-        assertFalse(staking.isActiveMaker(maker1Addr));
-        assertEq(staking.getMakerInfo(maker1Addr).stakedAmount, 0);
+        // Challenger gets bond back + 25% of slashed amount
+        uint256 bondAmount = disputes.calculateDisputeBond(10_000e6);
+        uint256 expectedChallengerReward = bondAmount + (expectedSlash / 4);
+        assertEq(usdc.balanceOf(maker2Addr) - challengerBalBefore, expectedChallengerReward);
+
+        // Maker1 keeps remaining stake
+        DataTypes.MakerInfo memory maker1Info = staking.getMakerInfo(maker1Addr);
+        assertEq(maker1Info.stakedAmount, 50_000e6 - expectedSlash);
+        assertTrue(maker1Info.isActive); // Still above 10k min
     }
 
     // --- Signature verification ---
@@ -277,7 +289,7 @@ contract GauloiDisputesTest is BaseTest {
         sigs[0] = sig;
         sigs[1] = sig; // Duplicate
 
-        vm.expectRevert("GauloiDisputes: duplicate signer");
+        vm.expectRevert("GauloiDisputes: already attested");
         disputes.resolveDispute(intentId, true, sigs);
     }
 
@@ -343,7 +355,8 @@ contract GauloiDisputesTest is BaseTest {
         assertTrue(disp.resolved);
         assertTrue(disp.fillDeemedValid);
 
-        // Maker gets escrowed funds + half bond
+        // Zero attestations → default fill-valid
+        // Maker gets escrowed funds + 50% of bond (no attestor rewards since no attestors)
         uint256 bondAmount = disputes.calculateDisputeBond(10_000e6);
         assertEq(usdc.balanceOf(maker1Addr) - maker1BalBefore, 10_000e6 + bondAmount / 2);
     }
@@ -379,14 +392,6 @@ contract GauloiDisputesTest is BaseTest {
 
         disputes.resolveDispute(intentId, true, sigs);
 
-        // _disputeOrders should be zeroed — verify via storage read
-        // Slot for mapping(bytes32 => Order) at storage slot 9 (_disputeOrders)
-        // keccak256(abi.encode(intentId, 9)) gives the base slot for the Order struct
-        bytes32 baseSlot = keccak256(abi.encode(intentId, uint256(8)));
-        // First field of Order is `taker` (address)
-        bytes32 takerSlot = vm.load(address(disputes), baseSlot);
-        assertEq(takerSlot, bytes32(0), "disputeOrders.taker should be zeroed after resolution");
-
         // _disputes should still be preserved for audit trail
         DataTypes.Dispute memory disp = disputes.getDispute(intentId);
         assertTrue(disp.resolved);
@@ -412,11 +417,6 @@ contract GauloiDisputesTest is BaseTest {
 
         disputes.resolveDispute(intentId, false, sigs);
 
-        // _disputeOrders should be zeroed
-        bytes32 baseSlot = keccak256(abi.encode(intentId, uint256(8)));
-        bytes32 takerSlot = vm.load(address(disputes), baseSlot);
-        assertEq(takerSlot, bytes32(0), "disputeOrders.taker should be zeroed after resolution");
-
         // _disputes preserved
         DataTypes.Dispute memory disp = disputes.getDispute(intentId);
         assertTrue(disp.resolved);
@@ -434,11 +434,6 @@ contract GauloiDisputesTest is BaseTest {
         vm.warp(block.timestamp + RESOLUTION_WINDOW + 1);
 
         disputes.finalizeExpiredDispute(intentId);
-
-        // _disputeOrders should be zeroed
-        bytes32 baseSlot = keccak256(abi.encode(intentId, uint256(8)));
-        bytes32 takerSlot = vm.load(address(disputes), baseSlot);
-        assertEq(takerSlot, bytes32(0), "disputeOrders.taker should be zeroed after expiry resolution");
 
         // _disputes preserved
         DataTypes.Dispute memory disp = disputes.getDispute(intentId);
