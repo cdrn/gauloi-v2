@@ -457,4 +457,133 @@ contract GauloiStakingTest is BaseTest {
         uint256 expectedCapacity = rawCapacity < stakeAmt ? rawCapacity : stakeAmt;
         assertEq(staking.availableCapacity(maker1), expectedCapacity);
     }
+
+    // --- totalActiveStake tracking ---
+
+    function test_totalActiveStake_tracking() public {
+        assertEq(staking.totalActiveStake(), 0);
+
+        // Stake maker1 above min → becomes active
+        _stakeMaker(maker1, 50_000e6);
+        assertEq(staking.totalActiveStake(), 50_000e6);
+
+        // Stake maker2
+        _stakeMaker(maker2, 30_000e6);
+        assertEq(staking.totalActiveStake(), 80_000e6);
+
+        // Unstake maker1 partially (still active)
+        vm.prank(maker1);
+        staking.requestUnstake(10_000e6);
+        vm.warp(block.timestamp + COOLDOWN);
+        vm.prank(maker1);
+        staking.completeUnstake();
+        assertEq(staking.totalActiveStake(), 70_000e6);
+
+        // Slash maker2 entirely
+        vm.prank(mockDisputes);
+        staking.slash(maker2, keccak256("intent"));
+        assertEq(staking.totalActiveStake(), 40_000e6);
+    }
+
+    function test_totalActiveStake_incrementalStaking() public {
+        // Stake below min — not active, totalActiveStake unchanged
+        _stakeMaker(maker1, 5_000e6);
+        assertEq(staking.totalActiveStake(), 0);
+
+        // Stake more to cross min threshold — full amount added
+        _stakeMaker(maker1, 5_000e6);
+        assertEq(staking.totalActiveStake(), 10_000e6);
+
+        // Stake more while already active — only delta added
+        _stakeMaker(maker1, 20_000e6);
+        assertEq(staking.totalActiveStake(), 30_000e6);
+    }
+
+    function test_totalActiveStake_unstakeDeactivates() public {
+        _stakeMaker(maker1, 15_000e6);
+        assertEq(staking.totalActiveStake(), 15_000e6);
+
+        // Unstake enough to drop below min
+        vm.prank(maker1);
+        staking.requestUnstake(10_000e6);
+        vm.warp(block.timestamp + COOLDOWN);
+        vm.prank(maker1);
+        staking.completeUnstake();
+
+        // Should subtract full old stake since deactivated
+        assertEq(staking.totalActiveStake(), 0);
+        assertFalse(staking.isActiveMaker(maker1));
+    }
+
+    // --- slashPartial ---
+
+    function test_slashPartial() public {
+        _stakeMaker(maker1, 50_000e6);
+
+        vm.prank(mockEscrow);
+        staking.increaseExposure(maker1, 30_000e6);
+
+        bytes32 intentId = keccak256("test_intent");
+        uint256 disputesBalBefore = usdc.balanceOf(mockDisputes);
+
+        vm.prank(mockDisputes);
+        uint256 slashed = staking.slashPartial(maker1, intentId, 20_000e6);
+
+        assertEq(slashed, 20_000e6);
+
+        DataTypes.MakerInfo memory info = staking.getMakerInfo(maker1);
+        assertEq(info.stakedAmount, 30_000e6);
+        assertEq(info.activeExposure, 30_000e6); // Capped at remaining stake
+        assertTrue(info.isActive); // Still above MIN_STAKE
+
+        assertEq(usdc.balanceOf(mockDisputes) - disputesBalBefore, 20_000e6);
+        assertEq(staking.totalActiveStake(), 30_000e6);
+    }
+
+    function test_slashPartial_capsAtStake() public {
+        _stakeMaker(maker1, 50_000e6);
+
+        vm.prank(mockDisputes);
+        uint256 slashed = staking.slashPartial(maker1, keccak256("intent"), 100_000e6);
+
+        // Should be capped at 50k
+        assertEq(slashed, 50_000e6);
+        assertEq(staking.getMakerInfo(maker1).stakedAmount, 0);
+        assertFalse(staking.isActiveMaker(maker1));
+        assertEq(staking.totalActiveStake(), 0);
+    }
+
+    function test_slashPartial_deactivatesIfBelowMin() public {
+        _stakeMaker(maker1, 15_000e6);
+
+        vm.prank(mockDisputes);
+        uint256 slashed = staking.slashPartial(maker1, keccak256("intent"), 10_000e6);
+
+        assertEq(slashed, 10_000e6);
+        assertEq(staking.getMakerInfo(maker1).stakedAmount, 5_000e6);
+        assertFalse(staking.isActiveMaker(maker1)); // Below 10k min
+        assertEq(staking.totalActiveStake(), 0);
+    }
+
+    function test_slashPartial_cancelsUnstakeIfDeactivated() public {
+        _stakeMaker(maker1, 15_000e6);
+
+        vm.prank(maker1);
+        staking.requestUnstake(5_000e6);
+
+        vm.prank(mockDisputes);
+        staking.slashPartial(maker1, keccak256("intent"), 10_000e6);
+
+        DataTypes.MakerInfo memory info = staking.getMakerInfo(maker1);
+        assertEq(info.unstakeRequestTime, 0);
+        assertEq(info.unstakeAmount, 0);
+    }
+
+    // --- getStake ---
+
+    function test_getStake() public {
+        assertEq(staking.getStake(maker1), 0);
+        _stakeMaker(maker1, 50_000e6);
+        assertEq(staking.getStake(maker1), 50_000e6);
+    }
 }
