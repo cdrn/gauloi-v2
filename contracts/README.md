@@ -23,6 +23,25 @@ forge snapshot --match-contract GasBenchmark         # update .gas-snapshot
 forge snapshot --match-contract GasBenchmark --diff  # check for regressions
 ```
 
+## Gas Benchmarks
+
+| Operation | Gas | Amortised |
+|---|---|---|
+| stake | 102,874 | — |
+| requestUnstake | 154,750 | — |
+| completeUnstake | 147,304 | — |
+| executeOrder | 268,913 | — |
+| submitFill | 296,544 | — |
+| settle | 269,263 | — |
+| settleBatch (5) | 716,856 | 143,371 |
+| settleBatch (10) | 1,273,915 | 127,392 |
+| reclaimExpired | 243,480 | — |
+| dispute | 783,119 | — |
+| resolveDispute | 735,632 | — |
+| finalizeExpiredDispute | 724,436 | — |
+
+Updated via `forge snapshot --match-contract GasBenchmark`.
+
 ## Deploy
 
 ```shell
@@ -59,4 +78,16 @@ See `script/Deploy.s.sol` for configurable parameters (MIN_STAKE, SETTLEMENT_WIN
 | Eth Sepolia | `0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E` |
 | Arbitrum Sepolia | `0x0153002d20B96532C639313c2d54c3dA09109309` |
 
-Stale price threshold: 24 hours. Min stake: 1 USDC.
+### Testnet Parameters (current deploy)
+
+| Parameter | Value |
+|---|---|
+| Settlement window | 15 minutes |
+| Commitment timeout | 5 minutes |
+| Min stake | 1 USDC |
+| Unstake cooldown | 48 hours |
+| Dispute resolution window | 24 hours |
+| Dispute bond | max(0.5% of fill, 25 USDC) |
+| Stale price threshold | 24 hours |
+
+See `plan.md` for production target values.
