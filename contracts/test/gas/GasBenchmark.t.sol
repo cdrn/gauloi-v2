@@ -39,8 +39,8 @@ contract GasBenchmark is Test {
     uint256 constant SETTLEMENT_WINDOW = 15 minutes;
     uint256 constant COMMITMENT_TIMEOUT = 5 minutes;
     uint256 constant RESOLUTION_WINDOW = 24 hours;
-    uint256 constant BOND_BPS = 50;
-    uint256 constant MIN_BOND = 25e6;
+    uint256 constant BOND_BPS = 200;
+    uint256 constant MIN_BOND = 250e6;
     uint256 constant DEST_CHAIN_ID = 42161;
     address constant DEST_ADDRESS = address(0xBEEF);
 
@@ -213,6 +213,65 @@ contract GasBenchmark is Test {
 
         vm.warp(block.timestamp + RESOLUTION_WINDOW + 1);
         disputes.finalizeExpiredDispute(intentId);
+    }
+
+    function test_gas_resolveDispute_stakeWeighted() public {
+        // 3 attestors with different stakes
+        uint256 maker4Key = 0xD00D;
+        uint256 maker5Key = 0xBAAD;
+        uint256 maker6Key = 0xFACE;
+        address maker4 = vm.addr(maker4Key);
+        address maker5 = vm.addr(maker5Key);
+        address maker6 = vm.addr(maker6Key);
+
+        usdc.mint(maker4, 10_000_000e6);
+        usdc.mint(maker5, 10_000_000e6);
+        usdc.mint(maker6, 10_000_000e6);
+        _stake(maker4, 50_000e6);
+        _stake(maker5, 30_000e6);
+        _stake(maker6, 20_000e6);
+
+        _stake(maker1, 50_000e6);
+        _stake(maker2, 50_000e6);
+
+        (bytes32 intentId, DataTypes.Order memory order) = _fillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+
+        vm.startPrank(maker2);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        bytes memory sig4 = _signAttestation(maker4Key, intentId, true, commitment.fillTxHash, order.destinationChainId);
+        bytes memory sig5 = _signAttestation(maker5Key, intentId, true, commitment.fillTxHash, order.destinationChainId);
+        bytes memory sig6 = _signAttestation(maker6Key, intentId, true, commitment.fillTxHash, order.destinationChainId);
+
+        bytes[] memory sigs = new bytes[](3);
+        sigs[0] = sig4;
+        sigs[1] = sig5;
+        sigs[2] = sig6;
+
+        disputes.resolveDispute(intentId, true, sigs);
+    }
+
+    function test_gas_slashPartial() public {
+        _stake(maker1, 50_000e6);
+        _stake(maker2, 50_000e6);
+        _stake(maker3, 50_000e6);
+
+        (bytes32 intentId, DataTypes.Order memory order) = _fillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+
+        vm.startPrank(maker2);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        bytes memory sig = _signAttestation(maker3Key, intentId, false, commitment.fillTxHash, order.destinationChainId);
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = sig;
+
+        disputes.resolveDispute(intentId, false, sigs);
     }
 
     // ═══════════════════════════════════════════
