@@ -23,6 +23,8 @@ interface IGauloiEscrow {
     );
     event IntentSettled(bytes32 indexed intentId, address indexed maker, uint256 amount);
     event IntentReclaimed(bytes32 indexed intentId, address indexed taker);
+    event Paused(address indexed caller);
+    event Unpaused(address indexed caller);
 
     // Maker executes a taker's signed order (pulls tokens from taker, commits)
     function executeOrder(
@@ -41,6 +43,11 @@ interface IGauloiEscrow {
 
     // Taker reclaims after commitment timeout
     function reclaimExpired(DataTypes.Order calldata order) external;
+
+    // --- Pause ---
+    function pause() external;
+    function unpause() external;
+    function paused() external view returns (bool);
 
     // --- View functions ---
     function getCommitment(bytes32 intentId) external view returns (DataTypes.Commitment memory);
