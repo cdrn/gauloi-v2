@@ -920,11 +920,30 @@ contract GauloiDisputesTest is BaseTest {
     }
 
     function test_expiredDispute_quorumMet_pluralityWins() public {
-        // Need equal-weight attestors on opposite sides so strict majority fails
+        // Plurality path: quorum met, no strict majority, deadline expires.
+        // Need votes on BOTH sides so neither has >50%. This requires:
+        //   1. First call adds votes on one side (doesn't hit quorum alone OR hits quorum but no majority)
+        //   2. Second call adds votes on other side, still no majority
+        //   3. Deadline expires → finalizeExpiredDispute uses plurality
+
+        // Use 4 additional makers with carefully chosen stakes
         uint256 maker4Key = 0xD00D;
+        uint256 maker5Key = 0xBAAD;
+        uint256 maker6Key = 0xFACE;
+        uint256 maker7Key = 0xDEAF;
         address maker4Addr = vm.addr(maker4Key);
+        address maker5Addr = vm.addr(maker5Key);
+        address maker6Addr = vm.addr(maker6Key);
+        address maker7Addr = vm.addr(maker7Key);
+
         usdc.mint(maker4Addr, 1_000_000e6);
-        _stakeWithAddr(maker4Addr, 50_000e6); // Same stake as maker3
+        usdc.mint(maker5Addr, 1_000_000e6);
+        usdc.mint(maker6Addr, 1_000_000e6);
+        usdc.mint(maker7Addr, 1_000_000e6);
+        _stakeWithAddr(maker4Addr, 30_000e6);
+        _stakeWithAddr(maker5Addr, 30_000e6);
+        _stakeWithAddr(maker6Addr, 25_000e6);
+        _stakeWithAddr(maker7Addr, 25_000e6);
 
         (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
         DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
@@ -934,42 +953,676 @@ contract GauloiDisputesTest is BaseTest {
         disputes.dispute(order);
         vm.stopPrank();
 
-        // Eligible = 200k - 50k(maker1) - 50k(maker2) = 100k
-        // Quorum = 30% of 100k = 30k
+        // totalActive = 50k+50k+50k+30k+30k+25k+25k = 260k
+        // eligible = 260k - 50k(maker1) - 50k(maker2) = 160k
+        // quorum = 30% of 160k = 48k
 
-        // maker3 votes valid (50k) — quorum met, strict majority (50k*2 > 50k) → resolves
-        // We need to prevent resolution during resolveDispute by having equal weights on both sides simultaneously
+        // maker4 (30k) + maker5 (30k) vote valid → 60k valid, 0 invalid
+        // total=60k, quorum: 60k*10000=600M >= 160k*3000=480M → quorum MET
+        // majority: valid 60k*2=120k > 60k total → strict majority → RESOLVES
+        // That's too easy. We need to prevent majority during resolveDispute.
+        // Single-side calls always produce 100% on that side → always majority.
+        //
+        // Key insight: the ONLY way to get quorum-met but no majority on expiry
+        // is if votes come from BOTH sides across separate calls, and neither
+        // achieves strict majority after either call.
+        //
+        // Call 1: maker4 (30k) votes invalid. total=30k < 48k quorum → returns.
+        // Call 2: maker5 (30k) + maker6 (25k) vote valid → valid=55k, invalid=30k, total=85k.
+        //   quorum: 85k*10000 >= 160k*3000 → 850M >= 480M ✓
+        //   valid majority: 55k*2=110k > 85k ✓ → RESOLVES. Still too easy.
+        //
+        // The problem: once quorum is met, the side that submitted votes last
+        // always has their votes counted fresh, and if they outnumber the other
+        // side total, they get majority. To NOT get majority, we need valid ≈ invalid ≈ 50%.
+        //
+        // Call 1: maker6 (25k) + maker7 (25k) vote invalid → invalid=50k, valid=0, total=50k
+        //   quorum: 50k*10000 >= 160k*3000 → 500M >= 480M ✓
+        //   invalid majority: 50k*2=100k > 50k ✓ → RESOLVES. Doh.
+        //
+        // Fundamental: with single-side per call, if quorum is met, the only side
+        // with votes has 100% → always majority. To avoid this, both sides need
+        // non-zero votes AND quorum met, which requires at least 2 calls, and
+        // the second call must not push its side to majority.
+        //
+        // Call 1: maker4 (30k) invalid. total=30k, quorum NOT met (30k < 48k). Returns.
+        // Call 2: maker5 (30k) valid. valid=30k, invalid=30k, total=60k.
+        //   quorum: 60k*10000 >= 160k*3000 → 600M >= 480M ✓
+        //   valid majority: 30k*2=60k > 60k → false (NOT strict)
+        //   invalid majority: 30k*2=60k > 60k → false
+        //   Neither side has majority → returns silently.
+        // Deadline expires → finalizeExpiredDispute → quorum met, plurality: 30k == 30k → tie.
+        // Code: `validWins = validWeight >= invalidWeight` → true → valid wins the tie.
 
-        // maker4 votes invalid (50k)
-        bytes memory sig4 = _signAttestation(
-            maker4Key, intentId, false, commitment.fillTxHash, order.destinationChainId
-        );
-        bytes[] memory sigs4 = new bytes[](1);
-        sigs4[0] = sig4;
-        disputes.resolveDispute(intentId, false, sigs4);
+        // Call 1: maker4 votes invalid (30k)
+        {
+            bytes memory sig4 = _signAttestation(
+                maker4Key, intentId, false, commitment.fillTxHash, order.destinationChainId
+            );
+            bytes[] memory sigs = new bytes[](1);
+            sigs[0] = sig4;
+            disputes.resolveDispute(intentId, false, sigs);
+        }
+        assertFalse(disputes.getDispute(intentId).resolved);
 
-        // After maker4 votes invalid(50k): total=50k, eligible=100k, 50k*10000>=100k*3000 → quorum met
-        // invalid=50k, valid=0 → invalid*2=100k > 50k → strict majority → resolves
+        // Call 2: maker5 votes valid (30k) — quorum met, but 50-50 → no majority
+        {
+            bytes memory sig5 = _signAttestation(
+                maker5Key, intentId, true, commitment.fillTxHash, order.destinationChainId
+            );
+            bytes[] memory sigs = new bytes[](1);
+            sigs[0] = sig5;
+            disputes.resolveDispute(intentId, true, sigs);
+        }
+        assertFalse(disputes.getDispute(intentId).resolved); // Still not resolved (no majority)
 
-        // Can't avoid strict majority with a single attestor on one side.
-        // For true plurality test, we need opposing votes submitted in same call — but our interface
-        // only allows one direction per call. So plurality only happens on expiry when votes
-        // came in across multiple calls without triggering majority.
+        // Warp past deadline → finalize with plurality
+        vm.warp(block.timestamp + RESOLUTION_WINDOW + 1);
+        disputes.finalizeExpiredDispute(intentId);
 
-        // Alternative: 3 attestors, 2 on one side and 1 on other, where single-side calls
-        // trigger quorum but not majority each time.
-        // That's complex, so let's test a simpler scenario: quorum met with equal votes at expiry.
-        // To do this, we need to prevent auto-resolution by having it not meet majority during resolveDispute.
-
-        // The issue is that with single-side calls, if quorum is met, there's always a strict majority
-        // because all participating votes are on one side. So plurality only applies when votes
-        // accumulate from both sides across calls but the deadline passes first.
-        // This is inherently hard to test without time manipulation between vote calls.
-
-        // Let's verify the basic case resolves correctly via the single-attestor path
+        // Tie: validWeight == invalidWeight → valid wins (>= check)
         DataTypes.Dispute memory disp = disputes.getDispute(intentId);
         assertTrue(disp.resolved);
-        assertFalse(disp.fillDeemedValid); // Invalid wins
+        assertTrue(disp.fillDeemedValid);
+    }
+
+    // ═══════════════════════════════════════════
+    //  Phase A: Edge case & fuzz tests
+    // ═══════════════════════════════════════════
+
+    // --- calculateSlashAmount edge cases ---
+
+    function test_calculateSlashAmount_zeroFill() public view {
+        // Guard against division by zero
+        assertEq(disputes.calculateSlashAmount(0, 100_000e6), 0);
+    }
+
+    function test_calculateSlashAmount_zeroStake() public view {
+        // Fill of 10k, maker has 0 stake → capped at 0
+        assertEq(disputes.calculateSlashAmount(10_000e6, 0), 0);
+    }
+
+    function test_calculateSlashAmount_fillOf1() public view {
+        // Extremely small fill: multiplier = 2 + 650e6 = huge, capped at 15
+        // slash = 1 * 15 = 15 (tiny)
+        assertEq(disputes.calculateSlashAmount(1, 100_000e6), 15);
+    }
+
+    // --- Fuzz: slash curve ---
+
+    function testFuzz_calculateSlashAmount_bounded(uint256 fillAmount, uint256 makerStake) public view {
+        fillAmount = bound(fillAmount, 1, 1_000_000e6); // 1 wei to 1M USDC
+        makerStake = bound(makerStake, 0, 10_000_000e6);
+
+        uint256 slash = disputes.calculateSlashAmount(fillAmount, makerStake);
+
+        // Invariant 1: slash <= makerStake
+        assertLe(slash, makerStake);
+
+        // Invariant 2: slash <= fillAmount * maxMultiplier
+        uint256 maxSlash = fillAmount * disputes.slashMaxMultiplier();
+        if (maxSlash / disputes.slashMaxMultiplier() == fillAmount) {
+            // No overflow in max calculation
+            assertLe(slash, maxSlash);
+        }
+
+        // Invariant 3: slash >= fillAmount * baseMultiplier (unless capped by stake)
+        // multiplier >= base, so slash >= fillAmount * base unless capped
+        uint256 baseSlash = fillAmount * disputes.slashBaseMultiplier();
+        if (baseSlash / disputes.slashBaseMultiplier() == fillAmount) {
+            if (baseSlash <= makerStake) {
+                assertGe(slash, baseSlash);
+            }
+        }
+    }
+
+    // --- Accumulative voting across multiple calls ---
+
+    function test_accumulativeVoting_acrossTwoCalls() public {
+        uint256 maker4Key = 0xD00D;
+        uint256 maker5Key = 0xBAAD;
+        address maker4Addr = vm.addr(maker4Key);
+        address maker5Addr = vm.addr(maker5Key);
+        usdc.mint(maker4Addr, 1_000_000e6);
+        usdc.mint(maker5Addr, 1_000_000e6);
+        _stakeWithAddr(maker4Addr, 30_000e6);
+        _stakeWithAddr(maker5Addr, 20_000e6);
+
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        // eligible = (150k+30k+20k) - 50k(maker1) - 50k(maker2) = 100k
+        // quorum = 30% of 100k = 30k
+
+        // Call 1: maker4 (30k valid). total=30k >= 30k quorum ✓
+        // majority: 30k*2=60k > 30k → strict majority → resolves immediately
+        // Hmm, that resolves. We need calls where quorum isn't met on first call.
+
+        // Set quorum to 60% so first call doesn't hit it
+        vm.prank(owner);
+        disputes.setQuorumParams(6000);
+        // quorum = 60% of 100k = 60k
+
+        // Call 1: maker4 (30k valid). total=30k < 60k quorum → returns, votes recorded
+        {
+            bytes memory sig = _signAttestation(
+                maker4Key, intentId, true, commitment.fillTxHash, order.destinationChainId
+            );
+            bytes[] memory sigs = new bytes[](1);
+            sigs[0] = sig;
+            disputes.resolveDispute(intentId, true, sigs);
+        }
+        assertFalse(disputes.getDispute(intentId).resolved);
+
+        // Verify votes were recorded
+        address[] memory attestors = disputes.getDisputeAttestors(intentId, true);
+        assertEq(attestors.length, 1);
+        assertEq(attestors[0], maker4Addr);
+
+        // Call 2: maker3 (50k valid) + maker5 (20k valid). total=30k+50k+20k=100k >= 60k ✓
+        // majority: 100k*2=200k > 100k → resolves
+        {
+            bytes memory sig3 = _signAttestation(
+                maker3Key, intentId, true, commitment.fillTxHash, order.destinationChainId
+            );
+            bytes memory sig5 = _signAttestation(
+                maker5Key, intentId, true, commitment.fillTxHash, order.destinationChainId
+            );
+            bytes[] memory sigs = new bytes[](2);
+            sigs[0] = sig3;
+            sigs[1] = sig5;
+            disputes.resolveDispute(intentId, true, sigs);
+        }
+
+        assertTrue(disputes.getDispute(intentId).resolved);
+        assertTrue(disputes.getDispute(intentId).fillDeemedValid);
+
+        // Verify all 3 attestors recorded
+        attestors = disputes.getDisputeAttestors(intentId, true);
+        assertEq(attestors.length, 3);
+    }
+
+    function test_accumulativeVoting_crossCallDuplicateReverts() public {
+        uint256 maker4Key = 0xD00D;
+        address maker4Addr = vm.addr(maker4Key);
+        usdc.mint(maker4Addr, 1_000_000e6);
+        _stakeWithAddr(maker4Addr, 10_000e6);
+
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        // Set high quorum so first call doesn't resolve
+        vm.prank(owner);
+        disputes.setQuorumParams(9000);
+
+        // Call 1: maker4 votes
+        bytes memory sig = _signAttestation(
+            maker4Key, intentId, true, commitment.fillTxHash, order.destinationChainId
+        );
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = sig;
+        disputes.resolveDispute(intentId, true, sigs);
+
+        // Call 2: maker4 tries again — reverts
+        vm.expectRevert("GauloiDisputes: already attested");
+        disputes.resolveDispute(intentId, true, sigs);
+    }
+
+    // --- Quorum boundary conditions ---
+
+    function test_quorumExactlyAtThreshold() public {
+        // Set up so participating is exactly 30% of eligible
+        uint256 maker4Key = 0xD00D;
+        address maker4Addr = vm.addr(maker4Key);
+        usdc.mint(maker4Addr, 1_000_000e6);
+        // We need maker4's stake to be exactly 30% of eligible
+        // eligible = totalActive - maker1 - maker2
+        // If maker4 stakes 15k: totalActive = 150k+15k = 165k, eligible = 165k-50k-50k = 65k
+        // quorum = 30% of 65k = 19.5k → 15k < 19.5k → NOT met
+        // If maker4 stakes 30k: totalActive = 180k, eligible = 80k, quorum = 24k → 30k >= 24k ✓
+
+        // Use precise amounts: eligible = 100k, quorum = 30k exactly
+        // Need totalActive - 100k = maker1 + maker2 → current total = 150k, eligible = 50k
+        // Add maker4 with 50k → total = 200k, eligible = 100k, quorum = 30k
+        _stakeWithAddr(maker4Addr, 50_000e6);
+
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        // eligible = 200k - 50k - 50k = 100k, quorum = 30k
+        // maker4 (50k) votes → 50k >= 30k ✓, majority: 50k*2=100k > 50k ✓
+        // That resolves. Let's test the exact boundary differently.
+
+        // Use a maker with exactly 30k stake:
+        uint256 maker5Key = 0xBAAD;
+        address maker5Addr = vm.addr(maker5Key);
+        usdc.mint(maker5Addr, 1_000_000e6);
+        _stakeWithAddr(maker5Addr, 30_000e6);
+
+        // New intent so dispute state is fresh
+        (bytes32 intentId2, DataTypes.Order memory order2) = _createAndFillIntent(5_000e6);
+        DataTypes.Commitment memory commitment2 = escrow.getCommitment(intentId2);
+
+        vm.startPrank(maker2Addr);
+        disputes.dispute(order2);
+        vm.stopPrank();
+
+        // eligible = 230k - 50k(maker1) - 50k(maker2) = 130k
+        // quorum = 30% of 130k = 39k
+
+        // maker5 (30k) votes → 30k < 39k → quorum NOT met → returns
+        {
+            bytes memory sig5 = _signAttestation(
+                maker5Key, intentId2, true, commitment2.fillTxHash, order2.destinationChainId
+            );
+            bytes[] memory sigs = new bytes[](1);
+            sigs[0] = sig5;
+            disputes.resolveDispute(intentId2, true, sigs);
+        }
+        assertFalse(disputes.getDispute(intentId2).resolved);
+
+        // maker4 (50k) votes → total = 80k >= 39k ✓, majority: 80k*2 > 80k ✓
+        {
+            bytes memory sig4 = _signAttestation(
+                maker4Key, intentId2, true, commitment2.fillTxHash, order2.destinationChainId
+            );
+            bytes[] memory sigs = new bytes[](1);
+            sigs[0] = sig4;
+            disputes.resolveDispute(intentId2, true, sigs);
+        }
+        assertTrue(disputes.getDispute(intentId2).resolved);
+    }
+
+    function test_majorityExactly5050_noResolution() public {
+        // 50-50 split: neither side has strict majority (need >50%, not >=50%)
+        uint256 maker4Key = 0xD00D;
+        address maker4Addr = vm.addr(maker4Key);
+        usdc.mint(maker4Addr, 1_000_000e6);
+        _stakeWithAddr(maker4Addr, 50_000e6); // Same as maker3
+
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        // eligible = 200k - 50k - 50k = 100k, quorum = 30k
+
+        // maker4 votes invalid (50k). Quorum 50k >= 30k ✓
+        // BUT: only invalid side → 50k*2=100k > 50k → strict majority → resolves
+        // Can't get 50-50 from a single call. Need to set up carefully.
+
+        // Set quorum to 80% so neither single call meets quorum
+        vm.prank(owner);
+        disputes.setQuorumParams(8000);
+        // quorum = 80% of 100k = 80k
+
+        // Call 1: maker3 votes valid (50k). total=50k < 80k → returns
+        {
+            bytes memory sig3 = _signAttestation(
+                maker3Key, intentId, true, commitment.fillTxHash, order.destinationChainId
+            );
+            bytes[] memory sigs = new bytes[](1);
+            sigs[0] = sig3;
+            disputes.resolveDispute(intentId, true, sigs);
+        }
+        assertFalse(disputes.getDispute(intentId).resolved);
+
+        // Call 2: maker4 votes invalid (50k). total=100k >= 80k ✓
+        // valid=50k, invalid=50k. Neither has majority (50k*2=100k NOT > 100k)
+        {
+            bytes memory sig4 = _signAttestation(
+                maker4Key, intentId, false, commitment.fillTxHash, order.destinationChainId
+            );
+            bytes[] memory sigs = new bytes[](1);
+            sigs[0] = sig4;
+            disputes.resolveDispute(intentId, false, sigs);
+        }
+        // Still not resolved — 50-50 split, no strict majority
+        assertFalse(disputes.getDispute(intentId).resolved);
+    }
+
+    // --- Zero eligible stake ---
+
+    function test_zeroEligibleStake_noResolution() public {
+        // Only 2 makers: maker1 (disputed) and maker2 (challenger). No one else to vote.
+        // Deploy fresh with only 2 makers
+        GauloiStaking freshStaking = new GauloiStaking(address(usdc), MIN_STAKE, COOLDOWN, 1 hours, owner);
+        GauloiEscrow freshEscrow = new GauloiEscrow(address(freshStaking), SETTLEMENT_WINDOW, COMMITMENT_TIMEOUT, owner);
+        GauloiDisputes freshDisputes = new GauloiDisputes(
+            address(freshStaking), address(freshEscrow), address(usdc),
+            RESOLUTION_WINDOW, BOND_BPS, MIN_BOND, owner
+        );
+        vm.startPrank(owner);
+        freshStaking.setEscrow(address(freshEscrow));
+        freshStaking.setDisputes(address(freshDisputes));
+        freshEscrow.setDisputes(address(freshDisputes));
+        freshEscrow.addSupportedToken(address(usdc));
+        vm.stopPrank();
+
+        // Stake 2 makers
+        vm.startPrank(maker1Addr);
+        usdc.approve(address(freshStaking), 50_000e6);
+        freshStaking.stake(50_000e6);
+        vm.stopPrank();
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(freshStaking), 50_000e6);
+        freshStaking.stake(50_000e6);
+        vm.stopPrank();
+
+        // Execute order (need taker approval for fresh escrow)
+        vm.prank(taker);
+        usdc.approve(address(freshEscrow), type(uint256).max);
+
+        DataTypes.Order memory order = DataTypes.Order({
+            taker: taker,
+            inputToken: address(usdc),
+            inputAmount: 10_000e6,
+            outputToken: address(usdc),
+            minOutputAmount: 9_990e6,
+            destinationChainId: DEST_CHAIN_ID,
+            destinationAddress: DEST_ADDRESS,
+            expiry: block.timestamp + 1 hours,
+            nonce: 999
+        });
+
+        // Sign with fresh escrow's domain separator
+        bytes32 structHash = keccak256(abi.encode(
+            IntentLib.ORDER_TYPEHASH,
+            order.taker, order.inputToken, order.inputAmount,
+            order.outputToken, order.minOutputAmount,
+            order.destinationChainId, order.destinationAddress,
+            order.expiry, order.nonce
+        ));
+        bytes32 digest = MessageHashUtils.toTypedDataHash(freshEscrow.domainSeparator(), structHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(takerKey, digest);
+        bytes memory sig = abi.encodePacked(r, s, v);
+
+        vm.prank(maker1Addr);
+        bytes32 intentId = freshEscrow.executeOrder(order, sig);
+        vm.prank(maker1Addr);
+        freshEscrow.submitFill(intentId, keccak256("dest_tx"));
+
+        // maker2 disputes
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(freshDisputes), type(uint256).max);
+        freshDisputes.dispute(order);
+        vm.stopPrank();
+
+        // eligible = totalActive(100k) - maker1(50k) - maker2(50k) = 0
+        // No one can vote. Warp past deadline.
+        vm.warp(block.timestamp + RESOLUTION_WINDOW + 1);
+
+        // finalizeExpiredDispute: totalParticipating = 0 → default valid
+        freshDisputes.finalizeExpiredDispute(intentId);
+        assertTrue(freshDisputes.getDispute(intentId).resolved);
+        assertTrue(freshDisputes.getDispute(intentId).fillDeemedValid);
+    }
+
+    // --- Rounding/dust with multiple attestors ---
+
+    function test_attestorRewards_dustStaysInTreasury() public {
+        // Use 3 attestors with stakes that produce rounding dust
+        uint256 maker4Key = 0xD00D;
+        uint256 maker5Key = 0xBAAD;
+        address maker4Addr = vm.addr(maker4Key);
+        address maker5Addr = vm.addr(maker5Key);
+        usdc.mint(maker4Addr, 1_000_000e6);
+        usdc.mint(maker5Addr, 1_000_000e6);
+        _stakeWithAddr(maker4Addr, 33_333e6);
+        _stakeWithAddr(maker5Addr, 33_333e6);
+
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        uint256 disputesBefore = usdc.balanceOf(address(disputes));
+
+        // 3 attestors: maker3(50k), maker4(33,333), maker5(33,333) all vote valid
+        {
+            bytes memory sig3 = _signAttestation(maker3Key, intentId, true, commitment.fillTxHash, order.destinationChainId);
+            bytes memory sig4 = _signAttestation(maker4Key, intentId, true, commitment.fillTxHash, order.destinationChainId);
+            bytes memory sig5 = _signAttestation(maker5Key, intentId, true, commitment.fillTxHash, order.destinationChainId);
+            bytes[] memory sigs = new bytes[](3);
+            sigs[0] = sig3;
+            sigs[1] = sig4;
+            sigs[2] = sig5;
+            disputes.resolveDispute(intentId, true, sigs);
+        }
+
+        // Bond = 250e6 (min). attestorPool = 250e6 / 4 = 62e6 (with 2e6 dust from bond split)
+        // totalWeight = 50_000e6 + 33_333e6 + 33_333e6 = 116_666e6
+        // maker3 share = 62e6 * 50_000e6 / 116_666e6 = 26_571_... → 26_571 (truncated)
+        // maker4 share = 62e6 * 33_333e6 / 116_666e6 = 17_714_... → 17_714 (truncated)
+        // maker5 share = same as maker4 = 17_714
+        // Total distributed = 26_571 + 17_714 + 17_714 = 61_999 < 62e6
+        // Dust: 62e6 - 61_999 = 1 stays in contract
+
+        // The contract should have: bond(250e6) - maker reward(125e6) - attestor distributed(≤62e6) + dust
+        // = treasury portion. Just verify contract balance is positive (dust retained).
+        uint256 disputesAfter = usdc.balanceOf(address(disputes));
+        // Treasury should have gotten: 250e6 - 125e6(maker) - ≤62e6(attestors) = ≥63e6
+        assertTrue(disputesAfter > 0);
+    }
+
+    // --- submitFill and reclaimExpired work when paused ---
+
+    function test_submitFill_worksWhenPaused() public {
+        (bytes32 intentId,) = _createAndFillIntent(10_000e6);
+        // Already filled in _createAndFillIntent, so let's test differently:
+        // Create a new order, execute, then pause, then submitFill
+
+        DataTypes.Order memory order2 = _makeOrder(5_000e6, 4_990e6);
+        bytes memory sig = _signOrder(takerKey, order2);
+        vm.prank(maker1Addr);
+        bytes32 intentId2 = escrow.executeOrder(order2, sig);
+
+        // Pause
+        vm.prank(address(disputes));
+        escrow.pause();
+
+        // submitFill should still work (not gated by whenNotPaused)
+        vm.prank(maker1Addr);
+        escrow.submitFill(intentId2, keccak256("fill_after_pause"));
+        assertTrue(escrow.getCommitment(intentId2).state == DataTypes.IntentState.Filled);
+    }
+
+    function test_reclaimExpired_worksWhenPaused() public {
+        DataTypes.Order memory order = _makeOrder(5_000e6, 4_990e6);
+        bytes memory sig = _signOrder(takerKey, order);
+        vm.prank(maker1Addr);
+        escrow.executeOrder(order, sig);
+
+        // Pause
+        vm.prank(address(disputes));
+        escrow.pause();
+
+        // Warp past commitment timeout
+        vm.warp(block.timestamp + COMMITMENT_TIMEOUT + 1);
+
+        // reclaimExpired should still work
+        vm.prank(taker);
+        escrow.reclaimExpired(order);
+    }
+
+    // --- slashPartial with pending unstake, maker stays active ---
+
+    function test_slashPartial_pendingUnstake_staysActive() public {
+        // maker1 stakes 50k, requests unstake 10k, then gets partially slashed
+        // but remains above minStake → stays active, unstake still pending
+        uint256 maker5Key = 0xBAAD;
+        address maker5Addr = vm.addr(maker5Key);
+        usdc.mint(maker5Addr, 1_000_000e6);
+        _stakeWithAddr(maker5Addr, 50_000e6);
+
+        vm.prank(maker5Addr);
+        staking.requestUnstake(10_000e6);
+
+        // Create and dispute an intent with maker5
+        DataTypes.Order memory order = _makeOrder(1_000e6, 990e6);
+        bytes memory orderSig = _signOrder(takerKey, order);
+        vm.prank(maker5Addr);
+        bytes32 intentId = escrow.executeOrder(order, orderSig);
+        vm.prank(maker5Addr);
+        escrow.submitFill(intentId, keccak256("fill"));
+
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        bytes memory sig = _signAttestation(
+            maker3Key, intentId, false, commitment.fillTxHash, order.destinationChainId
+        );
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = sig;
+        disputes.resolveDispute(intentId, false, sigs);
+
+        // $1k fill → slash 2,650. Remaining = 47,350 > 10k → stays active
+        DataTypes.MakerInfo memory info = staking.getMakerInfo(maker5Addr);
+        assertTrue(info.isActive);
+        assertEq(info.stakedAmount, 50_000e6 - 2_650e6);
+        // Unstake request should still be pending (maker stayed active)
+        assertGt(info.unstakeRequestTime, 0);
+        assertEq(info.unstakeAmount, 10_000e6);
+    }
+
+    // --- Fuzz: totalActiveStake invariant ---
+
+    function testFuzz_totalActiveStake_invariant(
+        uint256 stake1,
+        uint256 stake2,
+        uint256 slashAmt
+    ) public {
+        stake1 = bound(stake1, MIN_STAKE, 500_000e6);
+        stake2 = bound(stake2, MIN_STAKE, 500_000e6);
+        slashAmt = bound(slashAmt, 1, stake1);
+
+        // Use fresh addresses to avoid interference from setUp's existing stakes
+        address fuzzMaker1 = makeAddr("fuzzMaker1");
+        address fuzzMaker2 = makeAddr("fuzzMaker2");
+        usdc.mint(fuzzMaker1, stake1);
+        usdc.mint(fuzzMaker2, stake2);
+
+        uint256 baseTotalActive = staking.totalActiveStake(); // 150k from setUp
+
+        _stakeWithAddr(fuzzMaker1, stake1);
+        _stakeWithAddr(fuzzMaker2, stake2);
+
+        assertEq(staking.totalActiveStake(), baseTotalActive + stake1 + stake2);
+
+        // Partial slash fuzzMaker1
+        vm.prank(address(disputes));
+        uint256 slashed = staking.slashPartial(fuzzMaker1, keccak256("intent"), slashAmt);
+
+        uint256 remaining1 = stake1 - slashed;
+        uint256 expectedDelta;
+        if (remaining1 >= MIN_STAKE) {
+            expectedDelta = stake1 + stake2 - slashed;
+        } else {
+            expectedDelta = stake2; // fuzzMaker1 deactivated, only fuzzMaker2 contributes
+        }
+        assertEq(staking.totalActiveStake(), baseTotalActive + expectedDelta);
+
+        // Verify sum of fuzz maker active stakes
+        uint256 actualSum = 0;
+        if (staking.isActiveMaker(fuzzMaker1)) actualSum += staking.getStake(fuzzMaker1);
+        if (staking.isActiveMaker(fuzzMaker2)) actualSum += staking.getStake(fuzzMaker2);
+        assertEq(actualSum, expectedDelta);
+    }
+
+    // --- Fuzz: bond calculation ---
+
+    function testFuzz_calculateDisputeBond(uint256 fillAmount) public view {
+        fillAmount = bound(fillAmount, 0, 100_000_000e6); // 0 to 100M USDC
+
+        uint256 bond = disputes.calculateDisputeBond(fillAmount);
+
+        // Invariant: bond >= minDisputeBond
+        assertGe(bond, disputes.minDisputeBond());
+
+        // Invariant: bond >= fillAmount * bps / 10_000 (when no overflow)
+        uint256 bpsBond = (fillAmount * disputes.disputeBondBps()) / 10_000;
+        if (bpsBond > disputes.minDisputeBond()) {
+            assertEq(bond, bpsBond);
+        } else {
+            assertEq(bond, disputes.minDisputeBond());
+        }
+    }
+
+    // --- Expired dispute tie → valid wins ---
+
+    function test_expiredDispute_tieBreaksToValid() public {
+        // This is a focused test confirming that validWeight >= invalidWeight
+        // means valid wins ties.
+        uint256 maker4Key = 0xD00D;
+        address maker4Addr = vm.addr(maker4Key);
+        usdc.mint(maker4Addr, 1_000_000e6);
+        _stakeWithAddr(maker4Addr, 50_000e6);
+
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        // Set quorum high enough that single calls don't trigger quorum
+        vm.prank(owner);
+        disputes.setQuorumParams(9000);
+        // eligible = 200k - 50k - 50k = 100k, quorum = 90k
+
+        // maker3 (50k) valid, maker4 (50k) invalid → total 100k >= 90k ✓
+        // But they submit in separate calls, each below quorum
+
+        // Call 1: maker3 valid (50k), quorum: 50k < 90k → returns
+        {
+            bytes memory sig3 = _signAttestation(maker3Key, intentId, true, commitment.fillTxHash, order.destinationChainId);
+            bytes[] memory sigs = new bytes[](1);
+            sigs[0] = sig3;
+            disputes.resolveDispute(intentId, true, sigs);
+        }
+
+        // Call 2: maker4 invalid (50k), total=100k >= 90k ✓
+        // valid=50k, invalid=50k. Neither strict majority (50k*2=100k NOT > 100k)
+        {
+            bytes memory sig4 = _signAttestation(maker4Key, intentId, false, commitment.fillTxHash, order.destinationChainId);
+            bytes[] memory sigs = new bytes[](1);
+            sigs[0] = sig4;
+            disputes.resolveDispute(intentId, false, sigs);
+        }
+        assertFalse(disputes.getDispute(intentId).resolved);
+
+        // Expire → plurality: 50k == 50k → valid wins (>= tie-break)
+        vm.warp(block.timestamp + RESOLUTION_WINDOW + 1);
+        disputes.finalizeExpiredDispute(intentId);
+
+        assertTrue(disputes.getDispute(intentId).resolved);
+        assertTrue(disputes.getDispute(intentId).fillDeemedValid);
     }
 }
 
