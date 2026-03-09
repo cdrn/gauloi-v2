@@ -1,6 +1,7 @@
 "use client";
 
 import { useIntentStatus } from "@/hooks/useIntentStatus";
+import { useEffect } from "react";
 import { SUPPORTED_CHAINS, IntentState } from "@gauloi/common";
 import { CopyableAddress } from "./CopyableAddress";
 
@@ -10,6 +11,7 @@ interface IntentStatusProps {
   sourceChainId: number;
   destChainId: number;
   timestamp: number;
+  onPrune?: (intentId: string) => void;
 }
 
 const STATE_STYLES: Record<number, string> = {
@@ -20,15 +22,25 @@ const STATE_STYLES: Record<number, string> = {
   [IntentState.Expired]: "border-navy-600 text-teal-600",
 };
 
+// Intents older than 10 minutes with no on-chain commitment are dead
+const PRUNE_AGE_MS = 10 * 60 * 1000;
+
 export function IntentStatus({
   intentId,
   inputAmount,
   sourceChainId,
   destChainId,
   timestamp,
+  onPrune,
 }: IntentStatusProps) {
   const escrowAddress = SUPPORTED_CHAINS[sourceChainId]?.escrowAddress;
   const { state, label, isLoading } = useIntentStatus(intentId, escrowAddress, sourceChainId);
+
+  useEffect(() => {
+    if (!isLoading && state === null && Date.now() - timestamp > PRUNE_AGE_MS) {
+      onPrune?.(intentId);
+    }
+  }, [isLoading, state, timestamp, intentId, onPrune]);
 
   const sourceName = SUPPORTED_CHAINS[sourceChainId]?.name ?? `Chain ${sourceChainId}`;
   const destName = SUPPORTED_CHAINS[destChainId]?.name ?? `Chain ${destChainId}`;

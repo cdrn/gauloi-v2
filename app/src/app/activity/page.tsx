@@ -1,7 +1,7 @@
 "use client";
 
 import { IntentStatus } from "@/components/IntentStatus";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
 interface StoredIntent {
@@ -28,6 +28,14 @@ export default function ActivityPage() {
     return () => clearInterval(interval);
   }, []);
 
+  const handlePrune = useCallback((intentId: string) => {
+    setIntents((prev) => {
+      const filtered = prev.filter((i) => i.intentId !== intentId);
+      localStorage.setItem("gauloi_intents", JSON.stringify(filtered));
+      return filtered;
+    });
+  }, []);
+
   if (intents.length === 0) {
     return (
       <div className="text-center py-20">
@@ -49,7 +57,18 @@ export default function ActivityPage() {
     <div className="space-y-3">
       <div className="flex justify-between items-center mb-4">
         <h2 className="font-pixel text-sm text-pixel-cyan">ACTIVITY</h2>
-        <span className="font-pixel text-[8px] text-teal-600">{intents.length} TOTAL</span>
+        <div className="flex items-center gap-3">
+          <span className="font-pixel text-[8px] text-teal-600">{intents.length} TOTAL</span>
+          <button
+            onClick={() => {
+              localStorage.removeItem("gauloi_intents");
+              setIntents([]);
+            }}
+            className="font-pixel text-[8px] text-red-400 hover:text-red-300 transition-colors"
+          >
+            REFRESH
+          </button>
+        </div>
       </div>
       {intents.map((intent) => (
         <IntentStatus
@@ -59,6 +78,7 @@ export default function ActivityPage() {
           sourceChainId={intent.sourceChainId}
           destChainId={intent.destChainId}
           timestamp={intent.timestamp}
+          onPrune={handlePrune}
         />
       ))}
     </div>
