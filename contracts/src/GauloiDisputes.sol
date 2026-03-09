@@ -28,6 +28,27 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
     mapping(bytes32 => DataTypes.Dispute) internal _disputes;
     mapping(bytes32 => DataTypes.Order) internal _disputeOrders;
 
+    // --- Phase A state (appended after slot 7 to preserve layout) ---
+
+    // Slash curve params
+    uint256 public slashBaseMultiplier; // 2
+    uint256 public slashCurveK;         // 650e6
+    uint256 public slashMaxMultiplier;  // 15
+
+    // Quorum
+    uint256 public quorumBps; // 3000 (30%)
+
+    // Attestor recording — split by vote direction
+    mapping(bytes32 => address[]) internal _validAttestors;
+    mapping(bytes32 => address[]) internal _invalidAttestors;
+    mapping(bytes32 => mapping(address => uint256)) internal _attestorStakeWeights;
+    mapping(bytes32 => uint256) internal _totalValidWeight;
+    mapping(bytes32 => uint256) internal _totalInvalidWeight;
+    mapping(bytes32 => mapping(address => bool)) internal _hasAttested;
+
+    // Quorum failure
+    mapping(bytes32 => uint256) public quorumFailCount;
+
     constructor(
         address _staking,
         address _escrow,
@@ -46,6 +67,14 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         disputeBondBps = _bondBps;
         minDisputeBond = _minBond;
         domainSeparator = SignatureLib.buildDomainSeparator("GauloiDisputes", address(this));
+
+        // Slash curve defaults
+        slashBaseMultiplier = 2;
+        slashCurveK = 650e6;
+        slashMaxMultiplier = 15;
+
+        // Quorum default: 30%
+        quorumBps = 3000;
     }
 
     // --- Admin ---
@@ -58,6 +87,17 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
     function setDisputeBondParams(uint256 newBps, uint256 newMinBond) external onlyOwner {
         disputeBondBps = newBps;
         minDisputeBond = newMinBond;
+    }
+
+    function setSlashCurveParams(uint256 _base, uint256 _k, uint256 _max) external onlyOwner {
+        slashBaseMultiplier = _base;
+        slashCurveK = _k;
+        slashMaxMultiplier = _max;
+    }
+
+    function setQuorumParams(uint256 _quorumBps) external onlyOwner {
+        require(_quorumBps <= 10_000, "GauloiDisputes: invalid quorum");
+        quorumBps = _quorumBps;
     }
 
     function withdrawTreasury(address to, uint256 amount) external onlyOwner nonReentrant {
@@ -114,14 +154,7 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
         DataTypes.Order storage order = _disputeOrders[intentId];
 
-        // Verify threshold of unique staked maker signatures
-        uint256 required = requiredSignatures();
-        require(signatures.length >= required, "GauloiDisputes: insufficient signatures");
-
-        // Track unique signers to prevent duplicate attestations
-        address[] memory signers = new address[](signatures.length);
-        uint256 validCount = 0;
-
+        // Record each attestor's vote and stake weight
         for (uint256 i = 0; i < signatures.length; i++) {
             address signer = SignatureLib.recoverAttestor(
                 domainSeparator,
@@ -137,28 +170,57 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
             // Must not be the disputed maker or the challenger (conflict of interest)
             require(signer != commitment.maker, "GauloiDisputes: maker cannot attest own fill");
             require(signer != disp.challenger, "GauloiDisputes: challenger cannot attest");
+            // No duplicate attestations across calls
+            require(!_hasAttested[intentId][signer], "GauloiDisputes: already attested");
 
-            // Check uniqueness
-            for (uint256 j = 0; j < validCount; j++) {
-                require(signers[j] != signer, "GauloiDisputes: duplicate signer");
+            uint256 weight = staking.getStake(signer);
+            _hasAttested[intentId][signer] = true;
+            _attestorStakeWeights[intentId][signer] = weight;
+
+            if (fillValid) {
+                _validAttestors[intentId].push(signer);
+                _totalValidWeight[intentId] += weight;
+            } else {
+                _invalidAttestors[intentId].push(signer);
+                _totalInvalidWeight[intentId] += weight;
             }
 
-            signers[validCount] = signer;
-            validCount++;
+            emit AttestorRecorded(intentId, signer, fillValid, weight);
         }
 
-        require(validCount >= required, "GauloiDisputes: insufficient valid signatures");
+        // Check quorum + majority
+        uint256 makerStake = staking.getStake(commitment.maker);
+        uint256 challengerStake = staking.getStake(disp.challenger);
+        uint256 eligible = staking.totalActiveStake() - makerStake - challengerStake;
+
+        uint256 totalParticipating = _totalValidWeight[intentId] + _totalInvalidWeight[intentId];
+
+        // Quorum: participating >= quorumBps% of eligible
+        if (eligible == 0 || totalParticipating * 10_000 < eligible * quorumBps) {
+            return; // Not enough participation yet, votes recorded for future calls
+        }
+
+        // Strict majority: winningStake * 2 > totalParticipating
+        uint256 validWeight = _totalValidWeight[intentId];
+        uint256 invalidWeight = _totalInvalidWeight[intentId];
+
+        bool validWins = validWeight * 2 > totalParticipating;
+        bool invalidWins = invalidWeight * 2 > totalParticipating;
+
+        if (!validWins && !invalidWins) {
+            return; // No majority yet, votes recorded for future calls
+        }
 
         disp.resolved = true;
-        disp.fillDeemedValid = fillValid;
+        disp.fillDeemedValid = validWins;
 
-        if (fillValid) {
+        if (validWins) {
             _resolveAsValid(intentId, commitment, disp);
         } else {
             _resolveAsInvalid(intentId, commitment, disp);
         }
 
-        emit DisputeResolved(intentId, fillValid);
+        emit DisputeResolved(intentId, validWins);
     }
 
     function finalizeExpiredDispute(bytes32 intentId) external nonReentrant {
@@ -169,13 +231,57 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
 
         DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
 
-        // Default to fill-valid (prevents griefing by raising dispute and never resolving)
-        disp.resolved = true;
-        disp.fillDeemedValid = true;
+        uint256 totalParticipating = _totalValidWeight[intentId] + _totalInvalidWeight[intentId];
 
-        _resolveAsValid(intentId, commitment, disp);
+        if (totalParticipating == 0) {
+            // Case 1: Zero attestations — default fill-valid (griefing backstop)
+            disp.resolved = true;
+            disp.fillDeemedValid = true;
+            _resolveAsValid(intentId, commitment, disp);
+            emit DisputeResolved(intentId, true);
+            return;
+        }
 
-        emit DisputeResolved(intentId, true);
+        // Check if quorum was met
+        uint256 makerStake = staking.getStake(commitment.maker);
+        uint256 challengerStake = staking.getStake(disp.challenger);
+        uint256 eligible = staking.totalActiveStake() - makerStake - challengerStake;
+
+        bool quorumMet = eligible > 0 && totalParticipating * 10_000 >= eligible * quorumBps;
+
+        if (quorumMet) {
+            // Case 2: Quorum met — resolve by plurality (more weight wins)
+            bool validWins = _totalValidWeight[intentId] >= _totalInvalidWeight[intentId];
+
+            disp.resolved = true;
+            disp.fillDeemedValid = validWins;
+
+            if (validWins) {
+                _resolveAsValid(intentId, commitment, disp);
+            } else {
+                _resolveAsInvalid(intentId, commitment, disp);
+            }
+
+            emit DisputeResolved(intentId, validWins);
+        } else {
+            // Case 3: Quorum NOT met
+            quorumFailCount[intentId]++;
+
+            if (quorumFailCount[intentId] >= 2) {
+                // Second failure — pause escrow
+                escrow.pause();
+
+                // Default to fill-valid to resolve the dispute
+                disp.resolved = true;
+                disp.fillDeemedValid = true;
+                _resolveAsValid(intentId, commitment, disp);
+                emit DisputeResolved(intentId, true);
+            } else {
+                // First failure — extend deadline
+                disp.disputeDeadline = block.timestamp + disputeResolutionDuration;
+                emit QuorumExtended(intentId, disp.disputeDeadline, quorumFailCount[intentId]);
+            }
+        }
     }
 
     // --- Internal resolution ---
@@ -188,11 +294,14 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         DataTypes.Order storage order = _disputeOrders[intentId];
 
         // Fill was valid — disputer was wrong
-        // Slash disputer's bond: portion to maker as compensation, rest to protocol
+        // Bond pool: 50% to maker, 25% to correct attestors, 25% + dust to treasury
         uint256 makerReward = disp.bondAmount / 2;
+        uint256 attestorPool = disp.bondAmount / 4;
 
         bondToken.safeTransfer(commitment.maker, makerReward);
-        // Remaining bond stays in this contract as protocol treasury
+
+        // Distribute attestor rewards (valid-side attestors)
+        _distributeAttestorRewards(intentId, true, attestorPool);
 
         // Release escrow to maker
         escrow.resolveValid(intentId, order);
@@ -211,24 +320,53 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         DataTypes.Order storage order = _disputeOrders[intentId];
 
         // Fill was invalid — maker committed fraud
-        // Slash maker's entire stake
-        uint256 slashedAmount = staking.slash(commitment.maker, intentId);
+        // Calculate slash amount via curve
+        uint256 makerStake = staking.getStake(commitment.maker);
+        uint256 slashAmt = calculateSlashAmount(order.inputAmount, makerStake);
 
-        // Reward challenger: return bond + portion of slashed stake
-        uint256 challengerReward = disp.bondAmount + (slashedAmount / 4);
+        // Partial slash — returns actual slashed amount
+        uint256 actualSlashed = staking.slashPartial(commitment.maker, intentId, slashAmt);
 
-        // Slashed funds were sent to this contract by staking.slash()
-        bondToken.safeTransfer(disp.challenger, challengerReward);
-        // Remaining slashed stake stays in this contract as protocol treasury
+        // Bond: returned to challenger in full
+        // Slashed amount pool: 25% to challenger, 25% to correct attestors, 50% + dust to treasury
+        uint256 challengerSlashReward = actualSlashed / 4;
+        uint256 attestorPool = actualSlashed / 4;
+
+        bondToken.safeTransfer(disp.challenger, disp.bondAmount + challengerSlashReward);
+
+        // Distribute attestor rewards (invalid-side attestors)
+        _distributeAttestorRewards(intentId, false, attestorPool);
 
         // Refund taker's escrowed funds
-        // Exposure is already zeroed by staking.slash()
+        // Decrease exposure for the fill amount (slashPartial caps but doesn't clear exposure for the specific fill)
+        staking.decreaseExposure(commitment.maker, order.inputAmount);
         escrow.resolveInvalid(intentId, order);
 
         // Reclaim storage
         delete _disputeOrders[intentId];
 
-        emit ChallengerRewarded(disp.challenger, challengerReward);
+        emit ChallengerRewarded(disp.challenger, disp.bondAmount + challengerSlashReward);
+    }
+
+    function _distributeAttestorRewards(
+        bytes32 intentId,
+        bool validSide,
+        uint256 pool
+    ) internal {
+        address[] storage attestors = validSide ? _validAttestors[intentId] : _invalidAttestors[intentId];
+        uint256 totalWeight = validSide ? _totalValidWeight[intentId] : _totalInvalidWeight[intentId];
+
+        if (totalWeight == 0 || attestors.length == 0) return;
+
+        for (uint256 i = 0; i < attestors.length; i++) {
+            uint256 weight = _attestorStakeWeights[intentId][attestors[i]];
+            uint256 share = (pool * weight) / totalWeight;
+            if (share > 0) {
+                bondToken.safeTransfer(attestors[i], share);
+                emit AttestorRewarded(intentId, attestors[i], share);
+            }
+        }
+        // Dust stays in contract as treasury
     }
 
     // --- View functions ---
@@ -242,12 +380,28 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         return bpsBond > minDisputeBond ? bpsBond : minDisputeBond;
     }
 
-    function requiredSignatures() public pure returns (uint256) {
-        // For v0.1: at least 1 signature required (will scale with maker set)
-        return 1;
+    function calculateSlashAmount(uint256 fillAmount, uint256 makerTotalStake) public view returns (uint256) {
+        if (fillAmount == 0) return 0;
+        uint256 multiplier_e18 = slashBaseMultiplier * 1e18 + (slashCurveK * 1e18) / fillAmount;
+        uint256 maxMul_e18 = slashMaxMultiplier * 1e18;
+        if (multiplier_e18 > maxMul_e18) multiplier_e18 = maxMul_e18;
+        uint256 slashAmt = (fillAmount * multiplier_e18) / 1e18;
+        return slashAmt > makerTotalStake ? makerTotalStake : slashAmt;
     }
 
     function disputeResolutionWindow() external view returns (uint256) {
         return disputeResolutionDuration;
+    }
+
+    function getDisputeAttestors(bytes32 intentId, bool validSide) external view returns (address[] memory) {
+        return validSide ? _validAttestors[intentId] : _invalidAttestors[intentId];
+    }
+
+    function getAttestorStakeWeight(bytes32 intentId, address attestor) external view returns (uint256) {
+        return _attestorStakeWeights[intentId][attestor];
+    }
+
+    function getQuorumFailCount(bytes32 intentId) external view returns (uint256) {
+        return quorumFailCount[intentId];
     }
 }

@@ -57,18 +57,7 @@ export default function ActivityPage() {
     <div className="space-y-3">
       <div className="flex justify-between items-center mb-4">
         <h2 className="font-pixel text-sm text-pixel-cyan">ACTIVITY</h2>
-        <div className="flex items-center gap-3">
-          <span className="font-pixel text-[8px] text-teal-600">{intents.length} TOTAL</span>
-          <button
-            onClick={() => {
-              localStorage.removeItem("gauloi_intents");
-              setIntents([]);
-            }}
-            className="font-pixel text-[8px] text-red-400 hover:text-red-300 transition-colors"
-          >
-            REFRESH
-          </button>
-        </div>
+        <span className="font-pixel text-[8px] text-teal-600">{intents.length} TOTAL</span>
       </div>
       {intents.map((intent) => (
         <IntentStatus

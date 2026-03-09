@@ -28,6 +28,13 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
     // Commitment storage (intentId → Commitment)
     mapping(bytes32 => DataTypes.Commitment) internal _commitments;
 
+    bool public paused;
+
+    modifier whenNotPaused() {
+        require(!paused, "GauloiEscrow: paused");
+        _;
+    }
+
     modifier onlyDisputes() {
         require(msg.sender == disputes, "GauloiEscrow: caller is not disputes");
         _;
@@ -72,12 +79,24 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
         supportedTokens[token] = false;
     }
 
+    // --- Pause ---
+
+    function pause() external onlyDisputes {
+        paused = true;
+        emit Paused(msg.sender);
+    }
+
+    function unpause() external onlyOwner {
+        paused = false;
+        emit Unpaused(msg.sender);
+    }
+
     // --- Order execution ---
 
     function executeOrder(
         DataTypes.Order calldata order,
         bytes calldata takerSignature
-    ) external nonReentrant returns (bytes32 intentId) {
+    ) external nonReentrant whenNotPaused returns (bytes32 intentId) {
         require(supportedTokens[order.inputToken], "GauloiEscrow: unsupported input token");
         require(order.inputAmount > 0, "GauloiEscrow: zero amount");
         require(order.destinationAddress != address(0), "GauloiEscrow: zero destination");

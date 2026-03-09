@@ -27,6 +27,8 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
 
     mapping(address => DataTypes.MakerInfo) internal _makers;
 
+    uint256 public totalActiveStake;
+
     modifier onlyEscrow() {
         require(msg.sender == escrow, "GauloiStaking: caller is not escrow");
         _;
@@ -98,10 +100,19 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
         require(amount > 0, "GauloiStaking: zero amount");
         DataTypes.MakerInfo storage maker = _makers[msg.sender];
 
+        bool wasActive = maker.isActive;
+
         // Effects before interaction (CEI pattern)
         maker.stakedAmount += amount;
         if (!maker.isActive && maker.stakedAmount >= minStakeAmount) {
             maker.isActive = true;
+        }
+
+        // Update totalActiveStake
+        if (wasActive) {
+            totalActiveStake += amount;
+        } else if (maker.isActive) {
+            totalActiveStake += maker.stakedAmount;
         }
 
         emit Staked(msg.sender, amount);
@@ -140,6 +151,9 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
         uint256 available = maker.stakedAmount - maker.activeExposure;
         require(amount <= available, "GauloiStaking: insufficient available stake");
 
+        bool wasActive = maker.isActive;
+        uint256 oldStake = maker.stakedAmount;
+
         maker.stakedAmount -= amount;
         maker.unstakeRequestTime = 0;
         maker.unstakeAmount = 0;
@@ -147,6 +161,15 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
         // Deactivate if below minimum
         if (maker.stakedAmount < minStakeAmount) {
             maker.isActive = false;
+        }
+
+        // Update totalActiveStake
+        if (wasActive) {
+            if (maker.isActive) {
+                totalActiveStake -= amount;
+            } else {
+                totalActiveStake -= oldStake;
+            }
         }
 
         stakeTokenContract.safeTransfer(msg.sender, amount);
@@ -184,6 +207,10 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
         slashedAmount = info.stakedAmount;
         require(slashedAmount > 0, "GauloiStaking: nothing to slash");
 
+        if (info.isActive) {
+            totalActiveStake -= slashedAmount;
+        }
+
         info.stakedAmount = 0;
         info.activeExposure = 0;
         info.isActive = false;
@@ -191,6 +218,43 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
         // Cancel any pending unstake
         info.unstakeRequestTime = 0;
         info.unstakeAmount = 0;
+
+        // Transfer slashed funds to the disputes contract for distribution
+        stakeTokenContract.safeTransfer(disputes, slashedAmount);
+
+        emit Slashed(maker, slashedAmount, intentId);
+    }
+
+    function slashPartial(address maker, bytes32 intentId, uint256 amount) external onlyDisputes returns (uint256 slashedAmount) {
+        DataTypes.MakerInfo storage info = _makers[maker];
+        slashedAmount = amount < info.stakedAmount ? amount : info.stakedAmount;
+        require(slashedAmount > 0, "GauloiStaking: nothing to slash");
+
+        bool wasActive = info.isActive;
+
+        info.stakedAmount -= slashedAmount;
+
+        // Cap activeExposure at remaining stake
+        if (info.activeExposure > info.stakedAmount) {
+            info.activeExposure = info.stakedAmount;
+        }
+
+        // Deactivate if below minimum
+        if (info.stakedAmount < minStakeAmount) {
+            info.isActive = false;
+            // Cancel any pending unstake
+            info.unstakeRequestTime = 0;
+            info.unstakeAmount = 0;
+        }
+
+        // Update totalActiveStake
+        if (wasActive) {
+            if (info.isActive) {
+                totalActiveStake -= slashedAmount;
+            } else {
+                totalActiveStake -= (slashedAmount + info.stakedAmount);
+            }
+        }
 
         // Transfer slashed funds to the disputes contract for distribution
         stakeTokenContract.safeTransfer(disputes, slashedAmount);
@@ -214,6 +278,10 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
 
     function isActiveMaker(address maker) external view returns (bool) {
         return _makers[maker].isActive;
+    }
+
+    function getStake(address maker) external view returns (uint256) {
+        return _makers[maker].stakedAmount;
     }
 
     function stakeToken() external view returns (address) {

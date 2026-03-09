@@ -40,8 +40,8 @@ contract SettlementLoopTest is Test {
     uint256 constant SETTLEMENT_WINDOW = 15 minutes;
     uint256 constant COMMITMENT_TIMEOUT = 5 minutes;
     uint256 constant RESOLUTION_WINDOW = 24 hours;
-    uint256 constant BOND_BPS = 50;
-    uint256 constant MIN_BOND = 25e6;
+    uint256 constant BOND_BPS = 200;
+    uint256 constant MIN_BOND = 250e6;
     uint256 constant DEST_CHAIN = 42161;
     address constant DEST_ADDR = address(0xBEEF);
 
@@ -328,8 +328,6 @@ contract SettlementLoopTest is Test {
         vm.prank(makerA);
         escrow.submitFill(intentId, fakeFillTx);
 
-        uint256 makerAStakeBefore = staking.getMakerInfo(makerA).stakedAmount;
-
         // MakerB disputes (correctly)
         uint256 bondAmount = disputes.calculateDisputeBond(20_000e6);
         vm.startPrank(makerB);
@@ -350,13 +348,17 @@ contract SettlementLoopTest is Test {
         // Taker gets escrowed funds back
         assertEq(usdc.balanceOf(taker) - takerBalBefore, 20_000e6);
 
-        // MakerB gets bond back + 25% of slashed stake
-        uint256 expectedReward = bondAmount + (makerAStakeBefore / 4);
+        // Slash curve: 20k fill → multiplier = 2 + 650e6/20_000e6 = 2.0325
+        // slashAmt = 20_000e6 * 2.0325 = 40_650e6
+        uint256 expectedSlash = 40_650e6;
+
+        // MakerB gets bond back + 25% of slashed amount
+        uint256 expectedReward = bondAmount + (expectedSlash / 4);
         assertEq(usdc.balanceOf(makerB) - makerBBalBefore, expectedReward);
 
-        // MakerA is slashed completely
-        assertFalse(staking.isActiveMaker(makerA));
-        assertEq(staking.getMakerInfo(makerA).stakedAmount, 0);
+        // MakerA is partially slashed — keeps remaining stake, still active
+        assertEq(staking.getMakerInfo(makerA).stakedAmount, 100_000e6 - expectedSlash);
+        assertTrue(staking.isActiveMaker(makerA));
 
         // Intent refunded
         assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Expired);

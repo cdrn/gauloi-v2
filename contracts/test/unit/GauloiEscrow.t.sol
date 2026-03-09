@@ -398,6 +398,61 @@ contract GauloiEscrowTest is BaseTest {
         escrow.setDisputed(intentId);
     }
 
+    // --- Pause ---
+
+    function test_pause_onlyDisputes() public {
+        vm.prank(maker1);
+        vm.expectRevert("GauloiEscrow: caller is not disputes");
+        escrow.pause();
+
+        vm.prank(owner);
+        vm.expectRevert("GauloiEscrow: caller is not disputes");
+        escrow.pause();
+    }
+
+    function test_unpause_onlyOwner() public {
+        vm.prank(mockDisputes);
+        escrow.pause();
+
+        vm.prank(maker1);
+        vm.expectRevert();
+        escrow.unpause();
+
+        vm.prank(owner);
+        escrow.unpause();
+        assertFalse(escrow.paused());
+    }
+
+    function test_executeOrder_reverts_whenPaused() public {
+        vm.prank(mockDisputes);
+        escrow.pause();
+
+        DataTypes.Order memory order = _makeOrder(10_000e6, 9_990e6);
+        bytes memory sig = _signOrder(takerKey, order);
+
+        vm.prank(maker1);
+        vm.expectRevert("GauloiEscrow: paused");
+        escrow.executeOrder(order, sig);
+    }
+
+    function test_settle_works_whenPaused() public {
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+
+        vm.prank(maker1);
+        escrow.submitFill(intentId, keccak256("hash"));
+
+        vm.warp(block.timestamp + SETTLEMENT_WINDOW);
+
+        // Pause escrow
+        vm.prank(mockDisputes);
+        escrow.pause();
+
+        // Settle should still work even when paused
+        uint256 makerBalBefore = usdc.balanceOf(maker1);
+        escrow.settle(order);
+        assertEq(usdc.balanceOf(maker1) - makerBalBefore, 10_000e6);
+    }
+
     // --- Happy path end-to-end ---
 
     function test_fullLifecycle() public {

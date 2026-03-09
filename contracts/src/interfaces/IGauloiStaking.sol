@@ -31,6 +31,9 @@ interface IGauloiStaking {
     // Slash maker's entire stake (called by Disputes on fraud)
     function slash(address maker, bytes32 intentId) external returns (uint256 slashedAmount);
 
+    // Slash a partial amount of maker's stake (called by Disputes for curve-based slashing)
+    function slashPartial(address maker, bytes32 intentId, uint256 amount) external returns (uint256 slashedAmount);
+
     // --- View functions ---
     function getMakerInfo(address maker) external view returns (DataTypes.MakerInfo memory);
     function availableCapacity(address maker) external view returns (uint256);
@@ -38,6 +41,8 @@ interface IGauloiStaking {
     function stakeToken() external view returns (address);
     function minStake() external view returns (uint256);
     function cooldownPeriod() external view returns (uint256);
+    function totalActiveStake() external view returns (uint256);
+    function getStake(address maker) external view returns (uint256);
 
     // --- Oracle ---
     function setPriceFeed(address _priceFeed) external;
