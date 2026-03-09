@@ -381,6 +381,7 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
     }
 
     function calculateSlashAmount(uint256 fillAmount, uint256 makerTotalStake) public view returns (uint256) {
+        if (fillAmount == 0) return 0;
         uint256 multiplier_e18 = slashBaseMultiplier * 1e18 + (slashCurveK * 1e18) / fillAmount;
         uint256 maxMul_e18 = slashMaxMultiplier * 1e18;
         if (multiplier_e18 > maxMul_e18) multiplier_e18 = maxMul_e18;
