@@ -79,6 +79,12 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
         supportedTokens[token] = false;
     }
 
+    /// @dev Recover tokens stuck from failed dispute-resolution transfers
+    function rescueTokens(address token, address to, uint256 amount) external onlyOwner nonReentrant {
+        require(to != address(0), "GauloiEscrow: zero address");
+        IERC20(token).safeTransfer(to, amount);
+    }
+
     // --- Pause ---
 
     function pause() external onlyDisputes {
@@ -226,9 +232,17 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
 
         commitment.state = DataTypes.IntentState.Settled;
         staking.decreaseExposure(commitment.maker, order.inputAmount);
-        IERC20(order.inputToken).safeTransfer(commitment.maker, order.inputAmount);
 
-        emit IntentSettled(intentId, commitment.maker, order.inputAmount);
+        // Use try/catch to prevent a blacklisted maker from blocking dispute resolution
+        try IERC20(order.inputToken).transfer(commitment.maker, order.inputAmount) returns (bool success) {
+            if (success) {
+                emit IntentSettled(intentId, commitment.maker, order.inputAmount);
+            } else {
+                emit SettlementTransferFailed(intentId, commitment.maker, order.inputAmount);
+            }
+        } catch {
+            emit SettlementTransferFailed(intentId, commitment.maker, order.inputAmount);
+        }
     }
 
     /// @dev Called by Disputes contract after resolution — fill was invalid, refund taker
@@ -238,9 +252,17 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
         require(commitment.state == DataTypes.IntentState.Disputed, "GauloiEscrow: not disputed");
 
         commitment.state = DataTypes.IntentState.Expired;
-        IERC20(order.inputToken).safeTransfer(commitment.taker, order.inputAmount);
 
-        emit IntentReclaimed(intentId, commitment.taker);
+        // Use try/catch to prevent a blacklisted taker from blocking dispute resolution
+        try IERC20(order.inputToken).transfer(commitment.taker, order.inputAmount) returns (bool success) {
+            if (success) {
+                emit IntentReclaimed(intentId, commitment.taker);
+            } else {
+                emit SettlementTransferFailed(intentId, commitment.taker, order.inputAmount);
+            }
+        } catch {
+            emit SettlementTransferFailed(intentId, commitment.taker, order.inputAmount);
+        }
     }
 
     // --- View functions ---

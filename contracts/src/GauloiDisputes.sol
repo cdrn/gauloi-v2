@@ -298,7 +298,14 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         uint256 makerReward = disp.bondAmount / 2;
         uint256 attestorPool = disp.bondAmount / 4;
 
-        bondToken.safeTransfer(commitment.maker, makerReward);
+        // Use try/catch to prevent a blacklisted maker from blocking resolution
+        try bondToken.transfer(commitment.maker, makerReward) returns (bool success) {
+            if (!success) {
+                emit MakerRewardFailed(intentId, commitment.maker, makerReward);
+            }
+        } catch {
+            emit MakerRewardFailed(intentId, commitment.maker, makerReward);
+        }
 
         // Distribute attestor rewards (valid-side attestors)
         _distributeAttestorRewards(intentId, true, attestorPool);
@@ -335,7 +342,17 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         uint256 challengerSlashReward = actualSlashed / 4;
         uint256 attestorPool = actualSlashed / 4;
 
-        bondToken.safeTransfer(disp.challenger, disp.bondAmount + challengerSlashReward);
+        // Use try/catch to prevent a blacklisted challenger from blocking resolution
+        uint256 challengerTotal = disp.bondAmount + challengerSlashReward;
+        try bondToken.transfer(disp.challenger, challengerTotal) returns (bool success) {
+            if (success) {
+                emit ChallengerRewarded(disp.challenger, challengerTotal);
+            } else {
+                emit ChallengerRewardFailed(intentId, disp.challenger, challengerTotal);
+            }
+        } catch {
+            emit ChallengerRewardFailed(intentId, disp.challenger, challengerTotal);
+        }
 
         // Distribute attestor rewards (invalid-side attestors)
         _distributeAttestorRewards(intentId, false, attestorPool);
@@ -351,8 +368,6 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
 
         // Reclaim storage
         delete _disputeOrders[intentId];
-
-        emit ChallengerRewarded(disp.challenger, disp.bondAmount + challengerSlashReward);
     }
 
     function _distributeAttestorRewards(
@@ -369,8 +384,16 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
             uint256 weight = _attestorStakeWeights[intentId][attestors[i]];
             uint256 share = (pool * weight) / totalWeight;
             if (share > 0) {
-                bondToken.safeTransfer(attestors[i], share);
-                emit AttestorRewarded(intentId, attestors[i], share);
+                // Use try/catch to prevent a blacklisted attestor from blocking resolution
+                try bondToken.transfer(attestors[i], share) returns (bool success) {
+                    if (success) {
+                        emit AttestorRewarded(intentId, attestors[i], share);
+                    } else {
+                        emit AttestorRewardFailed(intentId, attestors[i], share);
+                    }
+                } catch {
+                    emit AttestorRewardFailed(intentId, attestors[i], share);
+                }
             }
         }
         // Dust stays in contract as treasury

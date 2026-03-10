@@ -23,6 +23,7 @@ interface IGauloiEscrow {
     );
     event IntentSettled(bytes32 indexed intentId, address indexed maker, uint256 amount);
     event IntentReclaimed(bytes32 indexed intentId, address indexed taker);
+    event SettlementTransferFailed(bytes32 indexed intentId, address indexed recipient, uint256 amount);
     event Paused(address indexed caller);
     event Unpaused(address indexed caller);
 
@@ -48,6 +49,9 @@ interface IGauloiEscrow {
     function pause() external;
     function unpause() external;
     function paused() external view returns (bool);
+
+    // --- Admin ---
+    function rescueTokens(address token, address to, uint256 amount) external;
 
     // --- View functions ---
     function getCommitment(bytes32 intentId) external view returns (DataTypes.Commitment memory);
