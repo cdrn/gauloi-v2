@@ -189,9 +189,14 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         }
 
         // Check quorum + majority
-        uint256 makerStake = staking.getStake(commitment.maker);
-        uint256 challengerStake = staking.getStake(disp.challenger);
-        uint256 eligible = staking.totalActiveStake() - makerStake - challengerStake;
+        // Safe subtraction: getStake() returns stakedAmount even for inactive makers
+        // whose stake is already excluded from totalActiveStake, so we clamp to zero.
+        uint256 eligible;
+        {
+            uint256 total = staking.totalActiveStake();
+            uint256 excluded = staking.getStake(commitment.maker) + staking.getStake(disp.challenger);
+            eligible = total > excluded ? total - excluded : 0;
+        }
 
         uint256 totalParticipating = _totalValidWeight[intentId] + _totalInvalidWeight[intentId];
 
@@ -242,10 +247,13 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
             return;
         }
 
-        // Check if quorum was met
-        uint256 makerStake = staking.getStake(commitment.maker);
-        uint256 challengerStake = staking.getStake(disp.challenger);
-        uint256 eligible = staking.totalActiveStake() - makerStake - challengerStake;
+        // Check if quorum was met (safe subtraction — see resolveDispute comment)
+        uint256 eligible;
+        {
+            uint256 total = staking.totalActiveStake();
+            uint256 excluded = staking.getStake(commitment.maker) + staking.getStake(disp.challenger);
+            eligible = total > excluded ? total - excluded : 0;
+        }
 
         bool quorumMet = eligible > 0 && totalParticipating * 10_000 >= eligible * quorumBps;
 
