@@ -13,6 +13,8 @@ interface IGauloiDisputes {
     event QuorumExtended(bytes32 indexed intentId, uint256 newDeadline, uint256 failCount);
     event AttestorRewarded(bytes32 indexed intentId, address indexed attestor, uint256 amount);
     event AttestorRewardFailed(bytes32 indexed intentId, address indexed attestor, uint256 amount);
+    event MakerRewardFailed(bytes32 indexed intentId, address indexed maker, uint256 amount);
+    event ChallengerRewardFailed(bytes32 indexed intentId, address indexed challenger, uint256 amount);
 
     // Any staked maker disputes a fill (stores order for later resolution)
     function dispute(DataTypes.Order calldata order) external;
