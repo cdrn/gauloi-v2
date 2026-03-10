@@ -2030,6 +2030,126 @@ contract GauloiDisputesTest is BaseTest {
         assertEq(env.bToken.balanceOf(maker1Addr) - maker1BalBefore, 10_125e6);
     }
 
+    // --- Eligible-stake underflow protection ---
+
+    function test_finalizeExpiredDispute_deactivatedMakerAndChallenger_noUnderflow() public {
+        // Reproduce: totalActiveStake < getStake(maker) + getStake(challenger)
+        // This caused underflow before the clamped subtraction fix.
+        //
+        // Setup: maker4 as attestor with small stake. All three main makers
+        // get slashed and deactivated, leaving only maker4 active.
+
+        uint256 maker4Key = 0xD00D;
+        address maker4Addr = vm.addr(maker4Key);
+        usdc.mint(maker4Addr, 1_000_000e6);
+        _stakeWithAddr(maker4Addr, 10_000e6); // Right at minStake
+
+        // Create and fill intent with maker1
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+
+        // maker2 disputes
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        // Set quorum to 99% so votes get recorded but can't resolve
+        vm.prank(owner);
+        disputes.setQuorumParams(9900);
+
+        // maker4 votes fill-valid (10k weight). Quorum not met (10k < 99% of eligible).
+        bytes memory sig4 = _signAttestation(
+            maker4Key, intentId, true, commitment.fillTxHash, order.destinationChainId
+        );
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = sig4;
+        disputes.resolveDispute(intentId, true, sigs);
+        assertFalse(disputes.getDispute(intentId).resolved);
+
+        // Slash all three main makers below minStake via separate disputes
+        // (simulated with direct slashPartial calls from disputes contract)
+        vm.startPrank(address(disputes));
+        staking.slashPartial(maker1Addr, keccak256("other1"), 42_000e6);
+        // maker1: 50k - 42k = 8k < 10k min → deactivated
+        staking.slashPartial(maker2Addr, keccak256("other2"), 42_000e6);
+        // maker2: 50k - 42k = 8k < 10k min → deactivated
+        staking.slashPartial(maker3Addr, keccak256("other3"), 42_000e6);
+        // maker3: 50k - 42k = 8k < 10k min → deactivated
+        vm.stopPrank();
+
+        // Now: totalActiveStake = 10k (only maker4)
+        // getStake(maker1) = 8k, getStake(maker2) = 8k
+        // Without fix: eligible = 10k - 8k - 8k = -6k → UNDERFLOW REVERT
+        // With fix: eligible = max(10k - 16k, 0) = 0
+        assertEq(staking.totalActiveStake(), 10_000e6);
+        assertEq(staking.getStake(maker1Addr), 8_000e6);
+        assertEq(staking.getStake(maker2Addr), 8_000e6);
+
+        // Warp past deadline
+        vm.warp(block.timestamp + RESOLUTION_WINDOW + 1);
+
+        // This MUST NOT revert. totalParticipating = 10k > 0, enters quorum check path.
+        // eligible = 0, quorum check: 10k*10000 >= 0*9900 → 100M >= 0 → quorum met.
+        // But eligible==0 is guarded: `eligible == 0 || ...` → quorumMet = false in the check.
+        // Actually: `eligible > 0 && totalParticipating * 10_000 >= eligible * quorumBps`
+        // eligible = 0 → false → quorumMet = false → quorum fail path.
+        disputes.finalizeExpiredDispute(intentId);
+
+        // Quorum failure incremented (not resolved)
+        assertEq(disputes.getQuorumFailCount(intentId), 1);
+    }
+
+    function test_resolveDispute_deactivatedMaker_noUnderflow() public {
+        // Same underflow scenario but through the resolveDispute path.
+        // With eligible clamped to 0, quorum can't be met → returns silently.
+
+        uint256 maker4Key = 0xD00D;
+        uint256 maker5Key = 0xBAAD;
+        address maker4Addr = vm.addr(maker4Key);
+        address maker5Addr = vm.addr(maker5Key);
+        usdc.mint(maker4Addr, 1_000_000e6);
+        usdc.mint(maker5Addr, 1_000_000e6);
+        _stakeWithAddr(maker4Addr, 10_000e6);
+        _stakeWithAddr(maker5Addr, 10_000e6);
+
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        // Slash all main makers below minStake
+        vm.startPrank(address(disputes));
+        staking.slashPartial(maker1Addr, keccak256("o1"), 42_000e6);
+        staking.slashPartial(maker2Addr, keccak256("o2"), 42_000e6);
+        staking.slashPartial(maker3Addr, keccak256("o3"), 42_000e6);
+        vm.stopPrank();
+
+        // totalActive = 20k (maker4 + maker5). getStake(maker1) = 8k. getStake(maker2) = 8k.
+        // Without fix: eligible = 20k - 8k - 8k = 4k (OK here, but maker4+maker5 submit)
+        // Let's slash maker5 too to make totalActive = 10k
+        vm.prank(address(disputes));
+        staking.slashPartial(maker5Addr, keccak256("o5"), 2_000e6);
+        // maker5: 10k - 2k = 8k < 10k → deactivated. totalActive = 10k (only maker4).
+
+        // Without fix: eligible = 10k - 8k - 8k = UNDERFLOW
+        // With fix: eligible = 0
+
+        // maker4 submits attestation — this call should NOT revert
+        bytes memory sig4 = _signAttestation(
+            maker4Key, intentId, true, commitment.fillTxHash, order.destinationChainId
+        );
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = sig4;
+        disputes.resolveDispute(intentId, true, sigs);
+
+        // Not resolved (eligible=0 → quorum impossible)
+        assertFalse(disputes.getDispute(intentId).resolved);
+    }
+
     // --- Expired dispute tie → valid wins ---
 
     function test_expiredDispute_tieBreaksToValid() public {
