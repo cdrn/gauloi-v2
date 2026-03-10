@@ -1907,6 +1907,10 @@ contract GauloiDisputesTest is BaseTest {
         // The failed maker reward stays in disputes contract as treasury
         // Bond = 250e6, makerReward = 250e6 / 2 = 125e6
         assertGe(env.bToken.balanceOf(address(env.freshDisputes)), 125e6);
+
+        // Escrow-side: maker was also blacklisted for the settlement transfer,
+        // so escrowed taker funds (10,000e6) stay in escrow (recoverable via rescueTokens)
+        assertGe(env.bToken.balanceOf(address(env.freshEscrow)), 10_000e6);
     }
 
     function test_resolveAsInvalid_blacklistedChallenger_stillResolves() public {
@@ -1967,9 +1971,11 @@ contract GauloiDisputesTest is BaseTest {
         // maker2 balance unchanged (transfer to blacklisted address failed)
         assertEq(env.bToken.balanceOf(maker2Addr), maker2BalBefore);
 
-        // Taker funds were still refunded (resolution completed)
-        // The challenger's bond + slash reward stays in contract as treasury
+        // The challenger's bond + slash reward stays in disputes contract as treasury
         assertGt(env.bToken.balanceOf(address(env.freshDisputes)), 0);
+
+        // Taker (not blacklisted) was still refunded via escrow.resolveInvalid
+        assertGe(env.bToken.balanceOf(taker), 10_000e6);
     }
 
     function test_resolveAsValid_nonBlacklistedMaker_getsReward() public {
