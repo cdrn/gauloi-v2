@@ -7,6 +7,9 @@ import {IGauloiEscrow} from "../../src/interfaces/IGauloiEscrow.sol";
 import {DataTypes} from "../../src/types/DataTypes.sol";
 import {IntentLib} from "../../src/libraries/IntentLib.sol";
 import {MockFeeOnTransferToken} from "../helpers/MockFeeOnTransferToken.sol";
+import {MockBlacklistableERC20} from "../helpers/MockBlacklistableERC20.sol";
+import {GauloiStaking} from "../../src/GauloiStaking.sol";
+import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 contract GauloiEscrowTest is BaseTest {
     address public mockDisputes = makeAddr("disputes");
@@ -630,6 +633,127 @@ contract GauloiEscrowTest is BaseTest {
 
         // id2 still settled successfully
         assertTrue(escrow.getCommitment(id2).state == DataTypes.IntentState.Settled);
+    }
+
+    // --- Blacklist DoS protection ---
+
+    function _deployBlacklistEscrow()
+        internal
+        returns (MockBlacklistableERC20 bToken, GauloiStaking bStaking, GauloiEscrow bEscrow)
+    {
+        bToken = new MockBlacklistableERC20("USD Coin", "USDC", 6);
+        bStaking = new GauloiStaking(address(bToken), MIN_STAKE, COOLDOWN, 1 hours, owner);
+        bEscrow = new GauloiEscrow(address(bStaking), SETTLEMENT_WINDOW, COMMITMENT_TIMEOUT, owner);
+
+        vm.startPrank(owner);
+        bStaking.setEscrow(address(bEscrow));
+        bEscrow.addSupportedToken(address(bToken));
+        vm.stopPrank();
+
+        // Fund and stake maker1
+        bToken.mint(maker1, 1_000_000e6);
+        vm.startPrank(maker1);
+        bToken.approve(address(bStaking), type(uint256).max);
+        bStaking.stake(50_000e6);
+        vm.stopPrank();
+
+        // Fund taker and approve escrow
+        bToken.mint(taker, 1_000_000e6);
+        vm.prank(taker);
+        bToken.approve(address(bEscrow), type(uint256).max);
+    }
+
+    function _signOrderForEscrow(
+        GauloiEscrow esc,
+        uint256 privateKey,
+        DataTypes.Order memory order
+    ) internal view returns (bytes memory) {
+        bytes32 structHash = keccak256(abi.encode(
+            IntentLib.ORDER_TYPEHASH,
+            order.taker, order.inputToken, order.inputAmount,
+            order.outputToken, order.minOutputAmount, order.destinationChainId,
+            order.destinationAddress, order.expiry, order.nonce
+        ));
+        bytes32 digest = MessageHashUtils.toTypedDataHash(esc.domainSeparator(), structHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function test_settle_blacklistedMaker_stillCompletes() public {
+        (MockBlacklistableERC20 bToken, GauloiStaking bStaking, GauloiEscrow bEscrow) = _deployBlacklistEscrow();
+
+        // Execute and fill order
+        DataTypes.Order memory order = DataTypes.Order({
+            taker: taker, inputToken: address(bToken), inputAmount: 10_000e6,
+            outputToken: address(bToken), minOutputAmount: 9_990e6,
+            destinationChainId: DEST_CHAIN_ID, destinationAddress: DEST_ADDRESS,
+            expiry: block.timestamp + 1 hours, nonce: 0
+        });
+        bytes memory sig = _signOrderForEscrow(bEscrow, takerKey, order);
+
+        vm.prank(maker1);
+        bytes32 intentId = bEscrow.executeOrder(order, sig);
+
+        vm.prank(maker1);
+        bEscrow.submitFill(intentId, keccak256("hash"));
+
+        vm.warp(block.timestamp + SETTLEMENT_WINDOW);
+
+        // Blacklist maker BEFORE settlement
+        bToken.blacklist(maker1);
+        uint256 makerBalBefore = bToken.balanceOf(maker1);
+
+        // Settle must NOT revert
+        vm.expectEmit(true, true, false, true);
+        emit IGauloiEscrow.SettlementTransferFailed(intentId, maker1, 10_000e6);
+        bEscrow.settle(order);
+
+        // State transitioned despite failed transfer
+        assertTrue(bEscrow.getCommitment(intentId).state == DataTypes.IntentState.Settled);
+        // Exposure released
+        assertEq(bStaking.getExposure(maker1), 0);
+        // Maker didn't receive tokens (blacklisted)
+        assertEq(bToken.balanceOf(maker1), makerBalBefore);
+        // Funds still in escrow (recoverable via rescueTokens)
+        assertEq(bToken.balanceOf(address(bEscrow)), 10_000e6);
+    }
+
+    function test_reclaimExpired_blacklistedTaker_stillCompletes() public {
+        (MockBlacklistableERC20 bToken, GauloiStaking bStaking, GauloiEscrow bEscrow) = _deployBlacklistEscrow();
+
+        // Execute order (maker commits but never fills)
+        DataTypes.Order memory order = DataTypes.Order({
+            taker: taker, inputToken: address(bToken), inputAmount: 10_000e6,
+            outputToken: address(bToken), minOutputAmount: 9_990e6,
+            destinationChainId: DEST_CHAIN_ID, destinationAddress: DEST_ADDRESS,
+            expiry: block.timestamp + 1 hours, nonce: 0
+        });
+        bytes memory sig = _signOrderForEscrow(bEscrow, takerKey, order);
+
+        vm.prank(maker1);
+        bytes32 intentId = bEscrow.executeOrder(order, sig);
+
+        // Commitment times out
+        vm.warp(block.timestamp + COMMITMENT_TIMEOUT + 1);
+
+        // Blacklist taker BEFORE reclaim
+        bToken.blacklist(taker);
+        uint256 takerBalBefore = bToken.balanceOf(taker);
+
+        // Reclaim must NOT revert
+        vm.prank(taker);
+        vm.expectEmit(true, true, false, true);
+        emit IGauloiEscrow.SettlementTransferFailed(intentId, taker, 10_000e6);
+        bEscrow.reclaimExpired(order);
+
+        // State transitioned despite failed transfer
+        assertTrue(bEscrow.getCommitment(intentId).state == DataTypes.IntentState.Expired);
+        // Exposure released
+        assertEq(bStaking.getExposure(maker1), 0);
+        // Taker didn't receive tokens (blacklisted)
+        assertEq(bToken.balanceOf(taker), takerBalBefore);
+        // Funds still in escrow (recoverable via rescueTokens)
+        assertEq(bToken.balanceOf(address(bEscrow)), 10_000e6);
     }
 
     // --- Happy path end-to-end ---
