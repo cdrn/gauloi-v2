@@ -58,26 +58,34 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
 
     function setDisputes(address _disputes) external onlyOwner {
         require(_disputes != address(0), "GauloiEscrow: zero address");
+        address oldDisputes = disputes;
         disputes = _disputes;
+        emit DisputesUpdated(oldDisputes, _disputes);
     }
 
     function setSettlementWindow(uint256 newWindow) external onlyOwner {
-        require(newWindow > 0, "GauloiEscrow: zero window");
+        require(newWindow >= 1 minutes && newWindow <= 7 days, "GauloiEscrow: window out of range");
+        uint256 oldValue = settlementWindowDuration;
         settlementWindowDuration = newWindow;
+        emit SettlementWindowUpdated(oldValue, newWindow);
     }
 
     function setCommitmentTimeout(uint256 newTimeout) external onlyOwner {
-        require(newTimeout > 0, "GauloiEscrow: zero timeout");
+        require(newTimeout >= 1 minutes && newTimeout <= 24 hours, "GauloiEscrow: timeout out of range");
+        uint256 oldValue = commitmentTimeoutDuration;
         commitmentTimeoutDuration = newTimeout;
+        emit CommitmentTimeoutUpdated(oldValue, newTimeout);
     }
 
     function addSupportedToken(address token) external onlyOwner {
         require(token != address(0), "GauloiEscrow: zero address");
         supportedTokens[token] = true;
+        emit TokenAdded(token);
     }
 
     function removeSupportedToken(address token) external onlyOwner {
         supportedTokens[token] = false;
+        emit TokenRemoved(token);
     }
 
     /// @dev Recover tokens stuck from failed dispute-resolution transfers
@@ -173,7 +181,10 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
 
     function settleBatch(DataTypes.Order[] calldata orders) external nonReentrant {
         for (uint256 i = 0; i < orders.length; i++) {
-            try this.settleInternal(orders[i]) {} catch {}
+            try this.settleInternal(orders[i]) {}
+            catch {
+                emit BatchSettleFailed(IntentLib.computeIntentId(orders[i]));
+            }
         }
     }
 

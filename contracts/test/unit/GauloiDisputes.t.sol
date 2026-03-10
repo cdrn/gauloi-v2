@@ -2189,6 +2189,87 @@ contract GauloiDisputesTest is BaseTest {
 
     // --- Expired dispute tie → valid wins ---
 
+    // --- Admin events ---
+
+    function test_setDisputeResolutionWindow_emitsEvent() public {
+        vm.prank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit IGauloiDisputes.ResolutionWindowUpdated(RESOLUTION_WINDOW, 12 hours);
+        disputes.setDisputeResolutionWindow(12 hours);
+    }
+
+    function test_setDisputeBondParams_emitsEvent() public {
+        vm.prank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit IGauloiDisputes.BondParamsUpdated(500, 100e6);
+        disputes.setDisputeBondParams(500, 100e6);
+    }
+
+    function test_setSlashCurveParams_emitsEvent() public {
+        vm.prank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit IGauloiDisputes.SlashCurveUpdated(3, 800e6, 20);
+        disputes.setSlashCurveParams(3, 800e6, 20);
+    }
+
+    function test_setQuorumParams_emitsEvent() public {
+        vm.prank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit IGauloiDisputes.QuorumUpdated(3000, 5000);
+        disputes.setQuorumParams(5000);
+    }
+
+    // --- Bounds ---
+
+    function test_setDisputeResolutionWindow_tooShort_reverts() public {
+        vm.prank(owner);
+        vm.expectRevert("GauloiDisputes: window out of range");
+        disputes.setDisputeResolutionWindow(59 minutes);
+    }
+
+    function test_setDisputeResolutionWindow_tooLong_reverts() public {
+        vm.prank(owner);
+        vm.expectRevert("GauloiDisputes: window out of range");
+        disputes.setDisputeResolutionWindow(31 days);
+    }
+
+    function test_setDisputeResolutionWindow_atBounds_succeeds() public {
+        vm.startPrank(owner);
+        disputes.setDisputeResolutionWindow(1 hours);
+        assertEq(disputes.disputeResolutionWindow(), 1 hours);
+        disputes.setDisputeResolutionWindow(30 days);
+        assertEq(disputes.disputeResolutionWindow(), 30 days);
+        vm.stopPrank();
+    }
+
+    function test_setSlashCurveParams_baseZero_reverts() public {
+        vm.prank(owner);
+        vm.expectRevert("GauloiDisputes: invalid slash curve");
+        disputes.setSlashCurveParams(0, 650e6, 15);
+    }
+
+    function test_setSlashCurveParams_maxLessThanBase_reverts() public {
+        vm.prank(owner);
+        vm.expectRevert("GauloiDisputes: invalid slash curve");
+        disputes.setSlashCurveParams(10, 650e6, 5);
+    }
+
+    function test_setSlashCurveParams_maxAbove100_reverts() public {
+        vm.prank(owner);
+        vm.expectRevert("GauloiDisputes: invalid slash curve");
+        disputes.setSlashCurveParams(1, 650e6, 101);
+    }
+
+    function test_setSlashCurveParams_atBounds_succeeds() public {
+        vm.startPrank(owner);
+        disputes.setSlashCurveParams(1, 0, 1);
+        assertEq(disputes.slashBaseMultiplier(), 1);
+        assertEq(disputes.slashMaxMultiplier(), 1);
+        disputes.setSlashCurveParams(1, 650e6, 100);
+        assertEq(disputes.slashMaxMultiplier(), 100);
+        vm.stopPrank();
+    }
+
     function test_expiredDispute_tieBreaksToValid() public {
         // This is a focused test confirming that validWeight >= invalidWeight
         // means valid wins ties.

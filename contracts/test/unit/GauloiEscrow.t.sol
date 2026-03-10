@@ -454,34 +454,20 @@ contract GauloiEscrowTest is BaseTest {
         assertEq(usdc.balanceOf(maker1) - makerBalBefore, 10_000e6);
     }
 
-    // --- SafeCast uint40 overflow protection ---
+    // --- Bounds now prevent overflow before SafeCast can trigger ---
 
     function test_executeOrder_hugeCommitmentTimeout_reverts() public {
-        // Set commitmentTimeoutDuration to type(uint40).max so block.timestamp + duration overflows uint40
+        // Bounds reject values above 24 hours
         vm.prank(owner);
+        vm.expectRevert("GauloiEscrow: timeout out of range");
         escrow.setCommitmentTimeout(type(uint40).max);
-
-        DataTypes.Order memory order = _makeOrder(10_000e6, 9_990e6);
-        bytes memory sig = _signOrder(takerKey, order);
-
-        // SafeCast.toUint40 should revert on overflow
-        vm.prank(maker1);
-        vm.expectRevert();
-        escrow.executeOrder(order, sig);
     }
 
     function test_submitFill_hugeSettlementWindow_reverts() public {
-        // Execute order normally first
-        (bytes32 intentId, ) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
-
-        // Then set settlement window to overflow value
+        // Bounds reject values above 7 days
         vm.prank(owner);
+        vm.expectRevert("GauloiEscrow: window out of range");
         escrow.setSettlementWindow(type(uint40).max);
-
-        // SafeCast.toUint40 should revert on overflow
-        vm.prank(maker1);
-        vm.expectRevert();
-        escrow.submitFill(intentId, keccak256("hash"));
     }
 
     function test_executeOrder_normalTimestamp_succeeds() public {
@@ -532,6 +518,118 @@ contract GauloiEscrowTest is BaseTest {
 
         // Escrow received exactly the right amount
         assertEq(usdc.balanceOf(address(escrow)), order.inputAmount);
+    }
+
+    // --- Admin events ---
+
+    function test_setDisputes_emitsEvent() public {
+        address newDisputes = makeAddr("newDisputes");
+        vm.prank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit IGauloiEscrow.DisputesUpdated(mockDisputes, newDisputes);
+        escrow.setDisputes(newDisputes);
+    }
+
+    function test_setSettlementWindow_emitsEvent() public {
+        vm.prank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit IGauloiEscrow.SettlementWindowUpdated(SETTLEMENT_WINDOW, 30 minutes);
+        escrow.setSettlementWindow(30 minutes);
+    }
+
+    function test_setCommitmentTimeout_emitsEvent() public {
+        vm.prank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit IGauloiEscrow.CommitmentTimeoutUpdated(COMMITMENT_TIMEOUT, 10 minutes);
+        escrow.setCommitmentTimeout(10 minutes);
+    }
+
+    function test_addSupportedToken_emitsEvent() public {
+        address newToken = makeAddr("newToken");
+        vm.prank(owner);
+        vm.expectEmit(true, false, false, true);
+        emit IGauloiEscrow.TokenAdded(newToken);
+        escrow.addSupportedToken(newToken);
+    }
+
+    function test_removeSupportedToken_emitsEvent() public {
+        vm.prank(owner);
+        vm.expectEmit(true, false, false, true);
+        emit IGauloiEscrow.TokenRemoved(address(usdc));
+        escrow.removeSupportedToken(address(usdc));
+    }
+
+    // --- Bounds ---
+
+    function test_setSettlementWindow_tooShort_reverts() public {
+        vm.prank(owner);
+        vm.expectRevert("GauloiEscrow: window out of range");
+        escrow.setSettlementWindow(59);
+    }
+
+    function test_setSettlementWindow_tooLong_reverts() public {
+        vm.prank(owner);
+        vm.expectRevert("GauloiEscrow: window out of range");
+        escrow.setSettlementWindow(7 days + 1);
+    }
+
+    function test_setSettlementWindow_atBounds_succeeds() public {
+        vm.startPrank(owner);
+        escrow.setSettlementWindow(1 minutes);
+        assertEq(escrow.settlementWindow(), 1 minutes);
+        escrow.setSettlementWindow(7 days);
+        assertEq(escrow.settlementWindow(), 7 days);
+        vm.stopPrank();
+    }
+
+    function test_setCommitmentTimeout_tooShort_reverts() public {
+        vm.prank(owner);
+        vm.expectRevert("GauloiEscrow: timeout out of range");
+        escrow.setCommitmentTimeout(59);
+    }
+
+    function test_setCommitmentTimeout_tooLong_reverts() public {
+        vm.prank(owner);
+        vm.expectRevert("GauloiEscrow: timeout out of range");
+        escrow.setCommitmentTimeout(24 hours + 1);
+    }
+
+    function test_setCommitmentTimeout_atBounds_succeeds() public {
+        vm.startPrank(owner);
+        escrow.setCommitmentTimeout(1 minutes);
+        assertEq(escrow.commitmentTimeout(), 1 minutes);
+        escrow.setCommitmentTimeout(24 hours);
+        assertEq(escrow.commitmentTimeout(), 24 hours);
+        vm.stopPrank();
+    }
+
+    // --- BatchSettleFailed event ---
+
+    function test_settleBatch_emitsBatchSettleFailed() public {
+        (bytes32 id1, DataTypes.Order memory order1) = _createAndExecuteOrder(5_000e6, 4_990e6, maker1);
+        (bytes32 id2, DataTypes.Order memory order2) = _createAndExecuteOrder(5_000e6, 4_990e6, maker1);
+
+        vm.startPrank(maker1);
+        escrow.submitFill(id1, keccak256("hash1"));
+        escrow.submitFill(id2, keccak256("hash2"));
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + SETTLEMENT_WINDOW);
+
+        // Settle id1 individually first
+        escrow.settle(order1);
+
+        // Batch: id1 already settled (will fail), id2 should succeed
+        DataTypes.Order[] memory orders = new DataTypes.Order[](2);
+        orders[0] = order1;
+        orders[1] = order2;
+
+        vm.expectEmit(true, false, false, true);
+        emit IGauloiEscrow.BatchSettleFailed(id1);
+        escrow.settleBatch(orders);
+
+        // id2 still settled successfully
+        assertTrue(escrow.getCommitment(id2).state == DataTypes.IntentState.Settled);
     }
 
     // --- Happy path end-to-end ---

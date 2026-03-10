@@ -26,6 +26,12 @@ interface IGauloiEscrow {
     event SettlementTransferFailed(bytes32 indexed intentId, address indexed recipient, uint256 amount);
     event Paused(address indexed caller);
     event Unpaused(address indexed caller);
+    event DisputesUpdated(address oldDisputes, address newDisputes);
+    event SettlementWindowUpdated(uint256 oldValue, uint256 newValue);
+    event CommitmentTimeoutUpdated(uint256 oldValue, uint256 newValue);
+    event TokenAdded(address indexed token);
+    event TokenRemoved(address indexed token);
+    event BatchSettleFailed(bytes32 indexed intentId);
 
     // Maker executes a taker's signed order (pulls tokens from taker, commits)
     function executeOrder(
