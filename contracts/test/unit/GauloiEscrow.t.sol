@@ -6,6 +6,7 @@ import {GauloiEscrow} from "../../src/GauloiEscrow.sol";
 import {IGauloiEscrow} from "../../src/interfaces/IGauloiEscrow.sol";
 import {DataTypes} from "../../src/types/DataTypes.sol";
 import {IntentLib} from "../../src/libraries/IntentLib.sol";
+import {MockFeeOnTransferToken} from "../helpers/MockFeeOnTransferToken.sol";
 
 contract GauloiEscrowTest is BaseTest {
     address public mockDisputes = makeAddr("disputes");
@@ -451,6 +452,48 @@ contract GauloiEscrowTest is BaseTest {
         uint256 makerBalBefore = usdc.balanceOf(maker1);
         escrow.settle(order);
         assertEq(usdc.balanceOf(maker1) - makerBalBefore, 10_000e6);
+    }
+
+    // --- Fee-on-transfer protection ---
+
+    function test_executeOrder_feeOnTransferToken_reverts() public {
+        MockFeeOnTransferToken fotToken = new MockFeeOnTransferToken("FoT", "FOT", 6);
+
+        // Whitelist the FoT token
+        vm.prank(owner);
+        escrow.addSupportedToken(address(fotToken));
+
+        // Mint and approve for taker
+        fotToken.mint(taker, 100_000e6);
+        vm.prank(taker);
+        fotToken.approve(address(escrow), type(uint256).max);
+
+        // Create order using FoT token
+        DataTypes.Order memory order = DataTypes.Order({
+            taker: taker,
+            inputToken: address(fotToken),
+            inputAmount: 10_000e6,
+            outputToken: address(usdc),
+            minOutputAmount: 9_990e6,
+            destinationChainId: DEST_CHAIN_ID,
+            destinationAddress: DEST_ADDRESS,
+            expiry: block.timestamp + 1 hours,
+            nonce: 999
+        });
+        bytes memory sig = _signOrder(takerKey, order);
+
+        // Should revert because FoT delivers less than inputAmount
+        vm.prank(maker1);
+        vm.expectRevert("GauloiEscrow: fee-on-transfer token");
+        escrow.executeOrder(order, sig);
+    }
+
+    function test_executeOrder_normalToken_balanceCheckPasses() public {
+        // Verify normal USDC still passes the balance check
+        (, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+
+        // Escrow received exactly the right amount
+        assertEq(usdc.balanceOf(address(escrow)), order.inputAmount);
     }
 
     // --- Happy path end-to-end ---
