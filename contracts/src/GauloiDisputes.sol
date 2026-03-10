@@ -369,8 +369,16 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
             uint256 weight = _attestorStakeWeights[intentId][attestors[i]];
             uint256 share = (pool * weight) / totalWeight;
             if (share > 0) {
-                bondToken.safeTransfer(attestors[i], share);
-                emit AttestorRewarded(intentId, attestors[i], share);
+                // Use try/catch to prevent a blacklisted attestor from blocking resolution
+                try bondToken.transfer(attestors[i], share) returns (bool success) {
+                    if (success) {
+                        emit AttestorRewarded(intentId, attestors[i], share);
+                    } else {
+                        emit AttestorRewardFailed(intentId, attestors[i], share);
+                    }
+                } catch {
+                    emit AttestorRewardFailed(intentId, attestors[i], share);
+                }
             }
         }
         // Dust stays in contract as treasury
