@@ -23,6 +23,7 @@ interface IGauloiEscrow {
     );
     event IntentSettled(bytes32 indexed intentId, address indexed maker, uint256 amount);
     event IntentReclaimed(bytes32 indexed intentId, address indexed taker);
+    event SettlementTransferFailed(bytes32 indexed intentId, address indexed recipient, uint256 amount);
     event Paused(address indexed caller);
     event Unpaused(address indexed caller);
 
