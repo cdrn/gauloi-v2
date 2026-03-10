@@ -2150,6 +2150,43 @@ contract GauloiDisputesTest is BaseTest {
         assertFalse(disputes.getDispute(intentId).resolved);
     }
 
+    function test_eligibleStake_normalPath_stillWorks() public {
+        // Sanity check: eligible-stake calculation still produces correct non-zero values
+        // when all makers are active (no deactivation, no underflow risk).
+        uint256 maker4Key = 0xD00D;
+        address maker4Addr = vm.addr(maker4Key);
+        usdc.mint(maker4Addr, 1_000_000e6);
+        _stakeWithAddr(maker4Addr, 50_000e6);
+
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+
+        // maker2 disputes
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order);
+        vm.stopPrank();
+
+        // totalActive = 200k (50k * 4). eligible = 200k - 50k(maker1) - 50k(maker2) = 100k.
+        assertEq(staking.totalActiveStake(), 200_000e6);
+
+        // maker3 + maker4 vote fill-valid (100k weight = 100% of eligible → quorum met)
+        bytes memory sig3 = _signAttestation(
+            maker3Key, intentId, true, commitment.fillTxHash, order.destinationChainId
+        );
+        bytes memory sig4 = _signAttestation(
+            maker4Key, intentId, true, commitment.fillTxHash, order.destinationChainId
+        );
+        bytes[] memory sigs = new bytes[](2);
+        sigs[0] = sig3;
+        sigs[1] = sig4;
+        disputes.resolveDispute(intentId, true, sigs);
+
+        // Should resolve — quorum met with strict majority
+        assertTrue(disputes.getDispute(intentId).resolved);
+        assertTrue(disputes.getDispute(intentId).fillDeemedValid);
+    }
+
     // --- Expired dispute tie → valid wins ---
 
     function test_expiredDispute_tieBreaksToValid() public {

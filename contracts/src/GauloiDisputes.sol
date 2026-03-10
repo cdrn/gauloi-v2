@@ -189,15 +189,7 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         }
 
         // Check quorum + majority
-        // Safe subtraction: getStake() returns stakedAmount even for inactive makers
-        // whose stake is already excluded from totalActiveStake, so we clamp to zero.
-        uint256 eligible;
-        {
-            uint256 total = staking.totalActiveStake();
-            uint256 excluded = staking.getStake(commitment.maker) + staking.getStake(disp.challenger);
-            eligible = total > excluded ? total - excluded : 0;
-        }
-
+        uint256 eligible = _eligibleVotingStake(commitment.maker, disp.challenger);
         uint256 totalParticipating = _totalValidWeight[intentId] + _totalInvalidWeight[intentId];
 
         // Quorum: participating >= quorumBps% of eligible
@@ -247,14 +239,8 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
             return;
         }
 
-        // Check if quorum was met (safe subtraction — see resolveDispute comment)
-        uint256 eligible;
-        {
-            uint256 total = staking.totalActiveStake();
-            uint256 excluded = staking.getStake(commitment.maker) + staking.getStake(disp.challenger);
-            eligible = total > excluded ? total - excluded : 0;
-        }
-
+        // Check if quorum was met
+        uint256 eligible = _eligibleVotingStake(commitment.maker, disp.challenger);
         bool quorumMet = eligible > 0 && totalParticipating * 10_000 >= eligible * quorumBps;
 
         if (quorumMet) {
@@ -405,6 +391,18 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
             }
         }
         // Dust stays in contract as treasury
+    }
+
+    // --- Internal helpers ---
+
+    /// @dev Voting-eligible stake: totalActiveStake minus the maker's and challenger's stakes.
+    ///      getStake() returns stakedAmount even for inactive makers whose stake is already
+    ///      excluded from totalActiveStake, so we clamp to zero to prevent underflow.
+    ///      Addition is safe: both values are bounded by real USDC supply (~4e16 at 6 decimals).
+    function _eligibleVotingStake(address maker, address challenger) internal view returns (uint256) {
+        uint256 total = staking.totalActiveStake();
+        uint256 excluded = staking.getStake(maker) + staking.getStake(challenger);
+        return total > excluded ? total - excluded : 0;
     }
 
     // --- View functions ---
