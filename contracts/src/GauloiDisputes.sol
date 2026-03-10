@@ -345,7 +345,9 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         // Use try/catch to prevent a blacklisted challenger from blocking resolution
         uint256 challengerTotal = disp.bondAmount + challengerSlashReward;
         try bondToken.transfer(disp.challenger, challengerTotal) returns (bool success) {
-            if (!success) {
+            if (success) {
+                emit ChallengerRewarded(disp.challenger, challengerTotal);
+            } else {
                 emit ChallengerRewardFailed(intentId, disp.challenger, challengerTotal);
             }
         } catch {
@@ -366,8 +368,6 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
 
         // Reclaim storage
         delete _disputeOrders[intentId];
-
-        emit ChallengerRewarded(disp.challenger, challengerTotal);
     }
 
     function _distributeAttestorRewards(
