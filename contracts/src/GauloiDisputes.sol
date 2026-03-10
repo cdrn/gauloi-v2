@@ -80,24 +80,32 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
     // --- Admin ---
 
     function setDisputeResolutionWindow(uint256 newWindow) external onlyOwner {
-        require(newWindow > 0, "GauloiDisputes: zero window");
+        require(newWindow >= 1 hours && newWindow <= 30 days, "GauloiDisputes: window out of range");
+        uint256 oldValue = disputeResolutionDuration;
         disputeResolutionDuration = newWindow;
+        emit ResolutionWindowUpdated(oldValue, newWindow);
     }
 
     function setDisputeBondParams(uint256 newBps, uint256 newMinBond) external onlyOwner {
+        require(newBps <= 10_000, "GauloiDisputes: bps exceeds 100%");
         disputeBondBps = newBps;
         minDisputeBond = newMinBond;
+        emit BondParamsUpdated(newBps, newMinBond);
     }
 
     function setSlashCurveParams(uint256 _base, uint256 _k, uint256 _max) external onlyOwner {
+        require(_base >= 1 && _max >= _base && _max <= 100, "GauloiDisputes: invalid slash curve");
         slashBaseMultiplier = _base;
         slashCurveK = _k;
         slashMaxMultiplier = _max;
+        emit SlashCurveUpdated(_base, _k, _max);
     }
 
     function setQuorumParams(uint256 _quorumBps) external onlyOwner {
         require(_quorumBps <= 10_000, "GauloiDisputes: invalid quorum");
+        uint256 oldValue = quorumBps;
         quorumBps = _quorumBps;
+        emit QuorumUpdated(oldValue, _quorumBps);
     }
 
     function withdrawTreasury(address to, uint256 amount) external onlyOwner nonReentrant {

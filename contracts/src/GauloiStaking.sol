@@ -66,20 +66,30 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
 
     function setEscrow(address _escrow) external onlyOwner {
         require(_escrow != address(0), "GauloiStaking: zero address");
+        address oldEscrow = escrow;
         escrow = _escrow;
+        emit EscrowUpdated(oldEscrow, _escrow);
     }
 
     function setDisputes(address _disputes) external onlyOwner {
         require(_disputes != address(0), "GauloiStaking: zero address");
+        address oldDisputes = disputes;
         disputes = _disputes;
+        emit DisputesUpdated(oldDisputes, _disputes);
     }
 
     function setMinStake(uint256 _minStake) external onlyOwner {
+        require(_minStake <= 10_000_000e6, "GauloiStaking: min stake too high");
+        uint256 oldValue = minStakeAmount;
         minStakeAmount = _minStake;
+        emit MinStakeUpdated(oldValue, _minStake);
     }
 
     function setCooldownPeriod(uint256 _cooldownPeriod) external onlyOwner {
+        require(_cooldownPeriod <= 90 days, "GauloiStaking: cooldown too long");
+        uint256 oldValue = cooldownDuration;
         cooldownDuration = _cooldownPeriod;
+        emit CooldownUpdated(oldValue, _cooldownPeriod);
     }
 
     function setPriceFeed(address _priceFeed) external onlyOwner {

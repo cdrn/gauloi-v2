@@ -586,4 +586,62 @@ contract GauloiStakingTest is BaseTest {
         _stakeMaker(maker1, 50_000e6);
         assertEq(staking.getStake(maker1), 50_000e6);
     }
+
+    // --- Admin events ---
+
+    function test_setMinStake_emitsEvent() public {
+        vm.prank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit IGauloiStaking.MinStakeUpdated(MIN_STAKE, 20_000e6);
+        staking.setMinStake(20_000e6);
+    }
+
+    function test_setCooldownPeriod_emitsEvent() public {
+        vm.prank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit IGauloiStaking.CooldownUpdated(COOLDOWN, 2 days);
+        staking.setCooldownPeriod(2 days);
+    }
+
+    function test_setEscrow_emitsEvent() public {
+        address newEscrow = makeAddr("newEscrow");
+        vm.prank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit IGauloiStaking.EscrowUpdated(mockEscrow, newEscrow);
+        staking.setEscrow(newEscrow);
+    }
+
+    function test_setDisputes_emitsEvent() public {
+        address newDisputes = makeAddr("newDisputes");
+        vm.prank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit IGauloiStaking.DisputesUpdated(mockDisputes, newDisputes);
+        staking.setDisputes(newDisputes);
+    }
+
+    // --- Bounds ---
+
+    function test_setCooldownPeriod_tooLong_reverts() public {
+        vm.prank(owner);
+        vm.expectRevert("GauloiStaking: cooldown too long");
+        staking.setCooldownPeriod(91 days);
+    }
+
+    function test_setCooldownPeriod_atMax_succeeds() public {
+        vm.prank(owner);
+        staking.setCooldownPeriod(90 days);
+        assertEq(staking.cooldownPeriod(), 90 days);
+    }
+
+    function test_setMinStake_tooHigh_reverts() public {
+        vm.prank(owner);
+        vm.expectRevert("GauloiStaking: min stake too high");
+        staking.setMinStake(10_000_001e6);
+    }
+
+    function test_setMinStake_atMax_succeeds() public {
+        vm.prank(owner);
+        staking.setMinStake(10_000_000e6);
+        assertEq(staking.minStake(), 10_000_000e6);
+    }
 }
