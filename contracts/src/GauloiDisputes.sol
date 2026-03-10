@@ -189,10 +189,7 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         }
 
         // Check quorum + majority
-        uint256 makerStake = staking.getStake(commitment.maker);
-        uint256 challengerStake = staking.getStake(disp.challenger);
-        uint256 eligible = staking.totalActiveStake() - makerStake - challengerStake;
-
+        uint256 eligible = _eligibleVotingStake(commitment.maker, disp.challenger);
         uint256 totalParticipating = _totalValidWeight[intentId] + _totalInvalidWeight[intentId];
 
         // Quorum: participating >= quorumBps% of eligible
@@ -243,10 +240,7 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         }
 
         // Check if quorum was met
-        uint256 makerStake = staking.getStake(commitment.maker);
-        uint256 challengerStake = staking.getStake(disp.challenger);
-        uint256 eligible = staking.totalActiveStake() - makerStake - challengerStake;
-
+        uint256 eligible = _eligibleVotingStake(commitment.maker, disp.challenger);
         bool quorumMet = eligible > 0 && totalParticipating * 10_000 >= eligible * quorumBps;
 
         if (quorumMet) {
@@ -298,7 +292,14 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         uint256 makerReward = disp.bondAmount / 2;
         uint256 attestorPool = disp.bondAmount / 4;
 
-        bondToken.safeTransfer(commitment.maker, makerReward);
+        // Use try/catch to prevent a blacklisted maker from blocking resolution
+        try bondToken.transfer(commitment.maker, makerReward) returns (bool success) {
+            if (!success) {
+                emit MakerRewardFailed(intentId, commitment.maker, makerReward);
+            }
+        } catch {
+            emit MakerRewardFailed(intentId, commitment.maker, makerReward);
+        }
 
         // Distribute attestor rewards (valid-side attestors)
         _distributeAttestorRewards(intentId, true, attestorPool);
@@ -324,6 +325,9 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         uint256 makerStake = staking.getStake(commitment.maker);
         uint256 slashAmt = calculateSlashAmount(order.inputAmount, makerStake);
 
+        // Snapshot exposure before slash — slashPartial may cap exposure at remaining stake
+        uint256 exposureBefore = staking.getExposure(commitment.maker);
+
         // Partial slash — returns actual slashed amount
         uint256 actualSlashed = staking.slashPartial(commitment.maker, intentId, slashAmt);
 
@@ -332,20 +336,32 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         uint256 challengerSlashReward = actualSlashed / 4;
         uint256 attestorPool = actualSlashed / 4;
 
-        bondToken.safeTransfer(disp.challenger, disp.bondAmount + challengerSlashReward);
+        // Use try/catch to prevent a blacklisted challenger from blocking resolution
+        uint256 challengerTotal = disp.bondAmount + challengerSlashReward;
+        try bondToken.transfer(disp.challenger, challengerTotal) returns (bool success) {
+            if (success) {
+                emit ChallengerRewarded(disp.challenger, challengerTotal);
+            } else {
+                emit ChallengerRewardFailed(intentId, disp.challenger, challengerTotal);
+            }
+        } catch {
+            emit ChallengerRewardFailed(intentId, disp.challenger, challengerTotal);
+        }
 
         // Distribute attestor rewards (invalid-side attestors)
         _distributeAttestorRewards(intentId, false, attestorPool);
 
         // Refund taker's escrowed funds
-        // Decrease exposure for the fill amount (slashPartial caps but doesn't clear exposure for the specific fill)
-        staking.decreaseExposure(commitment.maker, order.inputAmount);
+        // Only decrease exposure by what slashPartial's cap didn't already absorb
+        uint256 exposureAfter = staking.getExposure(commitment.maker);
+        uint256 alreadyReduced = exposureBefore - exposureAfter;
+        if (order.inputAmount > alreadyReduced) {
+            staking.decreaseExposure(commitment.maker, order.inputAmount - alreadyReduced);
+        }
         escrow.resolveInvalid(intentId, order);
 
         // Reclaim storage
         delete _disputeOrders[intentId];
-
-        emit ChallengerRewarded(disp.challenger, disp.bondAmount + challengerSlashReward);
     }
 
     function _distributeAttestorRewards(
@@ -362,11 +378,31 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
             uint256 weight = _attestorStakeWeights[intentId][attestors[i]];
             uint256 share = (pool * weight) / totalWeight;
             if (share > 0) {
-                bondToken.safeTransfer(attestors[i], share);
-                emit AttestorRewarded(intentId, attestors[i], share);
+                // Use try/catch to prevent a blacklisted attestor from blocking resolution
+                try bondToken.transfer(attestors[i], share) returns (bool success) {
+                    if (success) {
+                        emit AttestorRewarded(intentId, attestors[i], share);
+                    } else {
+                        emit AttestorRewardFailed(intentId, attestors[i], share);
+                    }
+                } catch {
+                    emit AttestorRewardFailed(intentId, attestors[i], share);
+                }
             }
         }
         // Dust stays in contract as treasury
+    }
+
+    // --- Internal helpers ---
+
+    /// @dev Voting-eligible stake: totalActiveStake minus the maker's and challenger's stakes.
+    ///      getStake() returns stakedAmount even for inactive makers whose stake is already
+    ///      excluded from totalActiveStake, so we clamp to zero to prevent underflow.
+    ///      Addition is safe: both values are bounded by real USDC supply (~4e16 at 6 decimals).
+    function _eligibleVotingStake(address maker, address challenger) internal view returns (uint256) {
+        uint256 total = staking.totalActiveStake();
+        uint256 excluded = staking.getStake(maker) + staking.getStake(challenger);
+        return total > excluded ? total - excluded : 0;
     }
 
     // --- View functions ---
