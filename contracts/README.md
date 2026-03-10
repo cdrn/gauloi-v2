@@ -28,19 +28,19 @@ forge snapshot --match-contract GasBenchmark --diff  # check for regressions
 | Operation | Gas | Amortised |
 |---|---|---|
 | stake | 125,495 | — |
-| requestUnstake | 177,349 | — |
-| completeUnstake | 165,787 | — |
-| executeOrder | 293,637 | — |
-| submitFill | 321,202 | — |
-| settle | 293,899 | — |
-| settleBatch (5) | 741,926 | 148,385 |
-| settleBatch (10) | 1,299,500 | 129,950 |
-| reclaimExpired | 263,351 | — |
-| dispute | 809,396 | — |
-| resolveDispute (1 sig) | 861,324 | — |
-| resolveDispute (3 sigs, stake-weighted) | 1,189,465 | — |
-| slashPartial (via resolve) | 875,868 | — |
-| finalizeExpiredDispute | 749,524 | — |
+| requestUnstake | 177,327 | — |
+| completeUnstake | 165,823 | — |
+| executeOrder | 296,042 | — |
+| submitFill | 323,655 | — |
+| settle | 296,419 | — |
+| settleBatch (5) | 754,394 | 150,879 |
+| settleBatch (10) | 1,324,458 | 132,446 |
+| reclaimExpired | 265,801 | — |
+| dispute | 811,872 | — |
+| resolveDispute (1 sig) | 863,755 | — |
+| resolveDispute (3 sigs, stake-weighted) | 1,192,166 | — |
+| slashPartial (via resolve) | 880,191 | — |
+| finalizeExpiredDispute | 751,781 | — |
 
 Updated via `forge snapshot --match-contract GasBenchmark`.
 
