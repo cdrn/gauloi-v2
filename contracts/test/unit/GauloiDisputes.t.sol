@@ -1844,6 +1844,186 @@ contract GauloiDisputesTest is BaseTest {
         assertGe(env.bToken.balanceOf(address(env.freshDisputes)), 31_250_000);
     }
 
+    // --- Maker/Challenger blacklist DoS protection ---
+
+    function test_resolveAsValid_blacklistedMaker_stillResolves() public {
+        BlacklistTestEnv memory env = _deployBlacklistEnv();
+
+        _fundAndStake(env, maker1Addr, 50_000e6);
+        _fundAndStake(env, maker2Addr, 50_000e6);
+        _fundAndStake(env, maker3Addr, 50_000e6);
+        env.bToken.mint(taker, 1_000_000e6);
+        vm.prank(taker);
+        env.bToken.approve(address(env.freshEscrow), type(uint256).max);
+
+        DataTypes.Order memory order = DataTypes.Order({
+            taker: taker,
+            inputToken: address(env.bToken),
+            inputAmount: 10_000e6,
+            outputToken: address(env.bToken),
+            minOutputAmount: 9_990e6,
+            destinationChainId: DEST_CHAIN_ID,
+            destinationAddress: DEST_ADDRESS,
+            expiry: block.timestamp + 1 hours,
+            nonce: 7770
+        });
+
+        bytes memory orderSig = _signOrderForEscrow(env.freshEscrow, order);
+        vm.prank(maker1Addr);
+        bytes32 intentId = env.freshEscrow.executeOrder(order, orderSig);
+        vm.prank(maker1Addr);
+        env.freshEscrow.submitFill(intentId, keccak256("dest_tx"));
+
+        DataTypes.Commitment memory commitment = env.freshEscrow.getCommitment(intentId);
+
+        // maker2 disputes
+        vm.startPrank(maker2Addr);
+        env.bToken.approve(address(env.freshDisputes), type(uint256).max);
+        env.freshDisputes.dispute(order);
+        vm.stopPrank();
+
+        uint256 maker1BalBefore = env.bToken.balanceOf(maker1Addr);
+
+        // BLACKLIST maker1 (the fill maker) before resolution
+        env.bToken.blacklist(maker1Addr);
+
+        // maker3 attests fill-valid → resolves as valid
+        bytes memory attSig = _signAttestationForDisputes(
+            env.freshDisputes, maker3Key, intentId, true, commitment.fillTxHash, order.destinationChainId
+        );
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = attSig;
+
+        // Must NOT revert despite maker1 being blacklisted
+        env.freshDisputes.resolveDispute(intentId, true, sigs);
+
+        // Dispute resolved successfully
+        assertTrue(env.freshDisputes.getDispute(intentId).resolved);
+        assertTrue(env.freshDisputes.getDispute(intentId).fillDeemedValid);
+
+        // maker1 balance unchanged (transfer to blacklisted address failed)
+        assertEq(env.bToken.balanceOf(maker1Addr), maker1BalBefore);
+
+        // The failed maker reward stays in disputes contract as treasury
+        // Bond = 250e6, makerReward = 250e6 / 2 = 125e6
+        assertGe(env.bToken.balanceOf(address(env.freshDisputes)), 125e6);
+    }
+
+    function test_resolveAsInvalid_blacklistedChallenger_stillResolves() public {
+        BlacklistTestEnv memory env = _deployBlacklistEnv();
+
+        _fundAndStake(env, maker1Addr, 50_000e6);
+        _fundAndStake(env, maker2Addr, 50_000e6);
+        _fundAndStake(env, maker3Addr, 50_000e6);
+        env.bToken.mint(taker, 1_000_000e6);
+        vm.prank(taker);
+        env.bToken.approve(address(env.freshEscrow), type(uint256).max);
+
+        DataTypes.Order memory order = DataTypes.Order({
+            taker: taker,
+            inputToken: address(env.bToken),
+            inputAmount: 10_000e6,
+            outputToken: address(env.bToken),
+            minOutputAmount: 9_990e6,
+            destinationChainId: DEST_CHAIN_ID,
+            destinationAddress: DEST_ADDRESS,
+            expiry: block.timestamp + 1 hours,
+            nonce: 7771
+        });
+
+        bytes memory orderSig = _signOrderForEscrow(env.freshEscrow, order);
+        vm.prank(maker1Addr);
+        bytes32 intentId = env.freshEscrow.executeOrder(order, orderSig);
+        vm.prank(maker1Addr);
+        env.freshEscrow.submitFill(intentId, keccak256("dest_tx"));
+
+        DataTypes.Commitment memory commitment = env.freshEscrow.getCommitment(intentId);
+
+        // maker2 disputes
+        vm.startPrank(maker2Addr);
+        env.bToken.approve(address(env.freshDisputes), type(uint256).max);
+        env.freshDisputes.dispute(order);
+        vm.stopPrank();
+
+        uint256 maker2BalBefore = env.bToken.balanceOf(maker2Addr);
+
+        // BLACKLIST maker2 (the challenger) before resolution
+        env.bToken.blacklist(maker2Addr);
+
+        // maker3 attests fill-invalid → resolves as invalid
+        bytes memory attSig = _signAttestationForDisputes(
+            env.freshDisputes, maker3Key, intentId, false, commitment.fillTxHash, order.destinationChainId
+        );
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = attSig;
+
+        // Must NOT revert despite maker2 (challenger) being blacklisted
+        env.freshDisputes.resolveDispute(intentId, false, sigs);
+
+        // Dispute resolved successfully
+        assertTrue(env.freshDisputes.getDispute(intentId).resolved);
+        assertFalse(env.freshDisputes.getDispute(intentId).fillDeemedValid);
+
+        // maker2 balance unchanged (transfer to blacklisted address failed)
+        assertEq(env.bToken.balanceOf(maker2Addr), maker2BalBefore);
+
+        // Taker funds were still refunded (resolution completed)
+        // The challenger's bond + slash reward stays in contract as treasury
+        assertGt(env.bToken.balanceOf(address(env.freshDisputes)), 0);
+    }
+
+    function test_resolveAsValid_nonBlacklistedMaker_getsReward() public {
+        BlacklistTestEnv memory env = _deployBlacklistEnv();
+
+        _fundAndStake(env, maker1Addr, 50_000e6);
+        _fundAndStake(env, maker2Addr, 50_000e6);
+        _fundAndStake(env, maker3Addr, 50_000e6);
+        env.bToken.mint(taker, 1_000_000e6);
+        vm.prank(taker);
+        env.bToken.approve(address(env.freshEscrow), type(uint256).max);
+
+        DataTypes.Order memory order = DataTypes.Order({
+            taker: taker,
+            inputToken: address(env.bToken),
+            inputAmount: 10_000e6,
+            outputToken: address(env.bToken),
+            minOutputAmount: 9_990e6,
+            destinationChainId: DEST_CHAIN_ID,
+            destinationAddress: DEST_ADDRESS,
+            expiry: block.timestamp + 1 hours,
+            nonce: 7772
+        });
+
+        bytes memory orderSig = _signOrderForEscrow(env.freshEscrow, order);
+        vm.prank(maker1Addr);
+        bytes32 intentId = env.freshEscrow.executeOrder(order, orderSig);
+        vm.prank(maker1Addr);
+        env.freshEscrow.submitFill(intentId, keccak256("dest_tx"));
+
+        DataTypes.Commitment memory commitment = env.freshEscrow.getCommitment(intentId);
+
+        vm.startPrank(maker2Addr);
+        env.bToken.approve(address(env.freshDisputes), type(uint256).max);
+        env.freshDisputes.dispute(order);
+        vm.stopPrank();
+
+        uint256 maker1BalBefore = env.bToken.balanceOf(maker1Addr);
+
+        // maker3 attests fill-valid → resolves as valid, maker1 NOT blacklisted
+        bytes memory attSig = _signAttestationForDisputes(
+            env.freshDisputes, maker3Key, intentId, true, commitment.fillTxHash, order.destinationChainId
+        );
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = attSig;
+
+        env.freshDisputes.resolveDispute(intentId, true, sigs);
+
+        assertTrue(env.freshDisputes.getDispute(intentId).resolved);
+
+        // maker1 received reward + escrowed funds: bond/2 = 125e6 + escrow = 10,000e6
+        assertEq(env.bToken.balanceOf(maker1Addr) - maker1BalBefore, 10_125e6);
+    }
+
     // --- Expired dispute tie → valid wins ---
 
     function test_expiredDispute_tieBreaksToValid() public {
