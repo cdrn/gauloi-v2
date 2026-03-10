@@ -137,8 +137,13 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
             order.minOutputAmount
         );
 
-        // Pull tokens from taker
+        // Pull tokens from taker — reject fee-on-transfer tokens
+        uint256 balBefore = IERC20(order.inputToken).balanceOf(address(this));
         IERC20(order.inputToken).safeTransferFrom(order.taker, address(this), order.inputAmount);
+        require(
+            IERC20(order.inputToken).balanceOf(address(this)) - balBefore == order.inputAmount,
+            "GauloiEscrow: fee-on-transfer token"
+        );
     }
 
     function submitFill(bytes32 intentId, bytes32 destinationTxHash) external nonReentrant {
