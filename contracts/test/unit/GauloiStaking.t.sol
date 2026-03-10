@@ -632,4 +632,16 @@ contract GauloiStakingTest is BaseTest {
         staking.setCooldownPeriod(90 days);
         assertEq(staking.cooldownPeriod(), 90 days);
     }
+
+    function test_setMinStake_tooHigh_reverts() public {
+        vm.prank(owner);
+        vm.expectRevert("GauloiStaking: min stake too high");
+        staking.setMinStake(10_000_001e6);
+    }
+
+    function test_setMinStake_atMax_succeeds() public {
+        vm.prank(owner);
+        staking.setMinStake(10_000_000e6);
+        assertEq(staking.minStake(), 10_000_000e6);
+    }
 }

@@ -87,6 +87,7 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
     }
 
     function setDisputeBondParams(uint256 newBps, uint256 newMinBond) external onlyOwner {
+        require(newBps <= 10_000, "GauloiDisputes: bps exceeds 100%");
         disputeBondBps = newBps;
         minDisputeBond = newMinBond;
         emit BondParamsUpdated(newBps, newMinBond);

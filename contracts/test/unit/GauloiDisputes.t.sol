@@ -2242,6 +2242,18 @@ contract GauloiDisputesTest is BaseTest {
         vm.stopPrank();
     }
 
+    function test_setDisputeBondParams_bpsExceeds100_reverts() public {
+        vm.prank(owner);
+        vm.expectRevert("GauloiDisputes: bps exceeds 100%");
+        disputes.setDisputeBondParams(10_001, 1e6);
+    }
+
+    function test_setDisputeBondParams_atMaxBps_succeeds() public {
+        vm.prank(owner);
+        disputes.setDisputeBondParams(10_000, 1e6);
+        assertEq(disputes.disputeBondBps(), 10_000);
+    }
+
     function test_setSlashCurveParams_baseZero_reverts() public {
         vm.prank(owner);
         vm.expectRevert("GauloiDisputes: invalid slash curve");

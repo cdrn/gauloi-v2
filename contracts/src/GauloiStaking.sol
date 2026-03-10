@@ -79,6 +79,7 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
     }
 
     function setMinStake(uint256 _minStake) external onlyOwner {
+        require(_minStake <= 10_000_000e6, "GauloiStaking: min stake too high");
         uint256 oldValue = minStakeAmount;
         minStakeAmount = _minStake;
         emit MinStakeUpdated(oldValue, _minStake);
