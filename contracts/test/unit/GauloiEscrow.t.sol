@@ -453,6 +453,44 @@ contract GauloiEscrowTest is BaseTest {
         assertEq(usdc.balanceOf(maker1) - makerBalBefore, 10_000e6);
     }
 
+    // --- SafeCast uint40 overflow protection ---
+
+    function test_executeOrder_hugeCommitmentTimeout_reverts() public {
+        // Set commitmentTimeoutDuration to type(uint40).max so block.timestamp + duration overflows uint40
+        vm.prank(owner);
+        escrow.setCommitmentTimeout(type(uint40).max);
+
+        DataTypes.Order memory order = _makeOrder(10_000e6, 9_990e6);
+        bytes memory sig = _signOrder(takerKey, order);
+
+        // SafeCast.toUint40 should revert on overflow
+        vm.prank(maker1);
+        vm.expectRevert();
+        escrow.executeOrder(order, sig);
+    }
+
+    function test_submitFill_hugeSettlementWindow_reverts() public {
+        // Execute order normally first
+        (bytes32 intentId, ) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+
+        // Then set settlement window to overflow value
+        vm.prank(owner);
+        escrow.setSettlementWindow(type(uint40).max);
+
+        // SafeCast.toUint40 should revert on overflow
+        vm.prank(maker1);
+        vm.expectRevert();
+        escrow.submitFill(intentId, keccak256("hash"));
+    }
+
+    function test_executeOrder_normalTimestamp_succeeds() public {
+        // Sanity check: normal durations work after SafeCast is in place
+        (bytes32 intentId, ) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+
+        DataTypes.Commitment memory c = escrow.getCommitment(intentId);
+        assertEq(c.commitmentDeadline, uint40(block.timestamp + COMMITMENT_TIMEOUT));
+    }
+
     // --- Happy path end-to-end ---
 
     function test_fullLifecycle() public {
