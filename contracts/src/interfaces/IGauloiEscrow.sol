@@ -50,6 +50,9 @@ interface IGauloiEscrow {
     function unpause() external;
     function paused() external view returns (bool);
 
+    // --- Admin ---
+    function rescueTokens(address token, address to, uint256 amount) external;
+
     // --- View functions ---
     function getCommitment(bytes32 intentId) external view returns (DataTypes.Commitment memory);
     function settlementWindow() external view returns (uint256);
