@@ -79,6 +79,12 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
         supportedTokens[token] = false;
     }
 
+    /// @dev Recover tokens stuck from failed dispute-resolution transfers
+    function rescueTokens(address token, address to, uint256 amount) external onlyOwner nonReentrant {
+        require(to != address(0), "GauloiEscrow: zero address");
+        IERC20(token).safeTransfer(to, amount);
+    }
+
     // --- Pause ---
 
     function pause() external onlyDisputes {
