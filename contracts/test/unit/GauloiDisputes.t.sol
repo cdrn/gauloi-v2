@@ -1573,6 +1573,85 @@ contract GauloiDisputesTest is BaseTest {
         }
     }
 
+    // --- Exposure desync after partial slash ---
+
+    function test_resolveAsInvalid_multipleOutstandingFills_exposureCorrect() public {
+        // maker1 (50k) fills 4 intents of 10k each → 40k exposure
+        (bytes32 id1, DataTypes.Order memory order1) = _createAndFillIntent(10_000e6);
+        (bytes32 id2, DataTypes.Order memory order2) = _createAndFillIntent(10_000e6);
+        (bytes32 id3, DataTypes.Order memory order3) = _createAndFillIntent(10_000e6);
+        (bytes32 id4, DataTypes.Order memory order4) = _createAndFillIntent(10_000e6);
+
+        assertEq(staking.getExposure(maker1Addr), 40_000e6);
+
+        // Dispute fill #1 and resolve as invalid
+        DataTypes.Commitment memory commitment = escrow.getCommitment(id1);
+
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order1);
+        vm.stopPrank();
+
+        bytes memory sig = _signAttestation(
+            maker3Key, id1, false, commitment.fillTxHash, order1.destinationChainId
+        );
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = sig;
+        disputes.resolveDispute(id1, false, sigs);
+
+        // Slash: 10k fill, 50k stake. multiplier = 2 + 650e6/10_000e6 = 2.065
+        // slash = 10k * 2.065 = 20,650. Remaining stake = 29,350.
+        assertEq(staking.getStake(maker1Addr), 50_000e6 - 20_650e6);
+
+        // slashPartial caps exposure: min(40k, 29,350) = 29,350
+        // exposureBefore = 40k, exposureAfter = 29,350
+        // alreadyReduced = 40k - 29,350 = 10,650
+        // 10k (fillAmount) < 10,650 (alreadyReduced) → skip decreaseExposure
+        // Final exposure = 29,350
+        //
+        // Without the fix: exposure = 29,350 - 10,000 = 19,350 (WRONG — 3 fills outstanding = 30k)
+        // With the fix: exposure = 29,350 (correct — capped at remaining stake)
+        assertEq(staking.getExposure(maker1Addr), 29_350e6);
+
+        // Verify this is NOT 19,350 (the buggy value)
+        assertTrue(staking.getExposure(maker1Addr) != 19_350e6);
+    }
+
+    function test_resolveAsInvalid_singleFill_exposureZero() public {
+        // Single fill: after slash, no cap needed → normal decreaseExposure
+        (bytes32 id1, DataTypes.Order memory order1) = _createAndFillIntent(10_000e6);
+
+        assertEq(staking.getExposure(maker1Addr), 10_000e6);
+
+        DataTypes.Commitment memory commitment = escrow.getCommitment(id1);
+
+        vm.startPrank(maker2Addr);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.dispute(order1);
+        vm.stopPrank();
+
+        bytes memory sig = _signAttestation(
+            maker3Key, id1, false, commitment.fillTxHash, order1.destinationChainId
+        );
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = sig;
+        disputes.resolveDispute(id1, false, sigs);
+
+        // Slash 20,650. Remaining = 29,350. Exposure was 10k < 29,350 → no cap.
+        // alreadyReduced = 0, full decreaseExposure(10k) → exposure = 0
+        assertEq(staking.getExposure(maker1Addr), 0);
+    }
+
+    function test_getExposure_viewFunction() public {
+        assertEq(staking.getExposure(maker1Addr), 0);
+
+        _createAndFillIntent(10_000e6);
+        assertEq(staking.getExposure(maker1Addr), 10_000e6);
+
+        _createAndFillIntent(5_000e6);
+        assertEq(staking.getExposure(maker1Addr), 15_000e6);
+    }
+
     // --- Expired dispute tie → valid wins ---
 
     function test_expiredDispute_tieBreaksToValid() public {

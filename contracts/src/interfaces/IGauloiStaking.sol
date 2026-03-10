@@ -43,6 +43,7 @@ interface IGauloiStaking {
     function cooldownPeriod() external view returns (uint256);
     function totalActiveStake() external view returns (uint256);
     function getStake(address maker) external view returns (uint256);
+    function getExposure(address maker) external view returns (uint256);
 
     // --- Oracle ---
     function setPriceFeed(address _priceFeed) external;

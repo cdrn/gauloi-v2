@@ -284,6 +284,10 @@ contract GauloiStaking is IGauloiStaking, Ownable, ReentrancyGuard {
         return _makers[maker].stakedAmount;
     }
 
+    function getExposure(address maker) external view returns (uint256) {
+        return _makers[maker].activeExposure;
+    }
+
     function stakeToken() external view returns (address) {
         return address(stakeTokenContract);
     }
