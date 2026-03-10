@@ -18,6 +18,7 @@ import { Filler } from "./chain/filler.js";
 import { Settler } from "./chain/settler.js";
 import { ChainWatcher } from "./chain/watcher.js";
 import { DisputeWatcher } from "./dispute/watcher.js";
+import { DisputeResponder } from "./dispute/responder.js";
 
 // Re-use relay message types
 enum MessageType {
@@ -40,6 +41,7 @@ export interface BotConfig {
   screener?: ComplianceScreener;
   quoterConfig?: Partial<QuoterConfig>;
   settleIntervalMs?: number;
+  disputeOnly?: boolean;
 }
 
 export class MakerBot {
@@ -50,6 +52,7 @@ export class MakerBot {
   private settler: Settler;
   private chainWatcher: ChainWatcher;
   private disputeWatcher: DisputeWatcher;
+  private disputeResponder: DisputeResponder;
   private config: BotConfig;
   private running = false;
   private cachedCapacity: bigint = 0n;
@@ -91,32 +94,47 @@ export class MakerBot {
       config.sourceChain.disputesAddress,
       config.makerAddress,
     );
+
+    this.disputeResponder = new DisputeResponder(
+      config.sourcePublicClient,
+      config.sourceWalletClient,
+      config.destPublicClient,
+      config.sourceChain.disputesAddress,
+      config.sourceChain.escrowAddress,
+      config.makerAddress,
+      config.sourceChain.chainId,
+    );
   }
 
   async start(): Promise<void> {
     this.running = true;
 
-    // Connect to relay
-    this.connectRelay();
+    // Always start dispute responder (attestation + finalization)
+    this.disputeResponder.start(this.config.settleIntervalMs ?? 60_000);
 
-    // Start settlement loop
-    this.settler.start(this.config.settleIntervalMs ?? 60_000);
+    if (!this.config.disputeOnly) {
+      // Full maker mode: relay + settler + fill watching
+      this.connectRelay();
 
-    // Start watching fills for dispute monitoring
-    this.chainWatcher.watchFills(async (event) => {
-      const order = this.orderCache.get(event.intentId);
-      const valid = await this.disputeWatcher.verifyFill(event, order);
-      if (!valid) {
-        console.log(`Invalid fill detected: ${event.intentId}`);
-        await this.disputeWatcher.dispute(event.intentId, order);
-      }
-    });
+      this.settler.start(this.config.settleIntervalMs ?? 60_000);
 
-    console.log(`Maker bot started: ${this.config.makerAddress}`);
+      this.chainWatcher.watchFills(async (event) => {
+        const order = this.orderCache.get(event.intentId);
+        const valid = await this.disputeWatcher.verifyFill(event, order);
+        if (!valid) {
+          console.log(`Invalid fill detected: ${event.intentId}`);
+          await this.disputeWatcher.dispute(event.intentId, order);
+        }
+      });
+    }
+
+    const mode = this.config.disputeOnly ? "dispute-only" : "full";
+    console.log(`Maker bot started (${mode}): ${this.config.makerAddress}`);
   }
 
   stop(): void {
     this.running = false;
+    this.disputeResponder.stop();
     this.ws?.close();
     this.settler.stop();
     this.chainWatcher.stop();
