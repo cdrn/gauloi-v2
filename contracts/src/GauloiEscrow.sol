@@ -205,10 +205,17 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
         // Release exposure
         staking.decreaseExposure(commitment.maker, order.inputAmount);
 
-        // Transfer escrowed tokens to maker
-        IERC20(order.inputToken).safeTransfer(commitment.maker, order.inputAmount);
-
-        emit IntentSettled(intentId, commitment.maker, order.inputAmount);
+        // Transfer escrowed tokens to maker — use try/catch so a blacklisted
+        // maker cannot DoS settlement (funds recoverable via rescueTokens)
+        try IERC20(order.inputToken).transfer(commitment.maker, order.inputAmount) returns (bool success) {
+            if (success) {
+                emit IntentSettled(intentId, commitment.maker, order.inputAmount);
+            } else {
+                emit SettlementTransferFailed(intentId, commitment.maker, order.inputAmount);
+            }
+        } catch {
+            emit SettlementTransferFailed(intentId, commitment.maker, order.inputAmount);
+        }
     }
 
     function reclaimExpired(DataTypes.Order calldata order) external nonReentrant {
@@ -226,10 +233,17 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
 
         commitment.state = DataTypes.IntentState.Expired;
 
-        // Return tokens to taker
-        IERC20(order.inputToken).safeTransfer(commitment.taker, order.inputAmount);
-
-        emit IntentReclaimed(intentId, commitment.taker);
+        // Return tokens to taker — use try/catch so a blacklisted taker
+        // cannot block exposure release (funds recoverable via rescueTokens)
+        try IERC20(order.inputToken).transfer(commitment.taker, order.inputAmount) returns (bool success) {
+            if (success) {
+                emit IntentReclaimed(intentId, commitment.taker);
+            } else {
+                emit SettlementTransferFailed(intentId, commitment.taker, order.inputAmount);
+            }
+        } catch {
+            emit SettlementTransferFailed(intentId, commitment.taker, order.inputAmount);
+        }
     }
 
     // --- Disputes integration ---
