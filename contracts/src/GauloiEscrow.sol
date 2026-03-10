@@ -7,6 +7,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IGauloiEscrow} from "./interfaces/IGauloiEscrow.sol";
 import {IGauloiStaking} from "./interfaces/IGauloiStaking.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {DataTypes} from "./types/DataTypes.sol";
 import {IntentLib} from "./libraries/IntentLib.sol";
 import {SignatureLib} from "./libraries/SignatureLib.sol";
@@ -121,7 +122,7 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
             taker: order.taker,
             state: DataTypes.IntentState.Committed,
             maker: msg.sender,
-            commitmentDeadline: uint40(block.timestamp + commitmentTimeoutDuration),
+            commitmentDeadline: SafeCast.toUint40(block.timestamp + commitmentTimeoutDuration),
             disputeWindowEnd: 0,
             fillTxHash: bytes32(0)
         });
@@ -150,7 +151,7 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
 
         commitment.state = DataTypes.IntentState.Filled;
         commitment.fillTxHash = destinationTxHash;
-        commitment.disputeWindowEnd = uint40(block.timestamp + settlementWindowDuration);
+        commitment.disputeWindowEnd = SafeCast.toUint40(block.timestamp + settlementWindowDuration);
 
         emit FillSubmitted(intentId, msg.sender, destinationTxHash, commitment.disputeWindowEnd);
     }
