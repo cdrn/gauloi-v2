@@ -324,6 +324,9 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         uint256 makerStake = staking.getStake(commitment.maker);
         uint256 slashAmt = calculateSlashAmount(order.inputAmount, makerStake);
 
+        // Snapshot exposure before slash — slashPartial may cap exposure at remaining stake
+        uint256 exposureBefore = staking.getExposure(commitment.maker);
+
         // Partial slash — returns actual slashed amount
         uint256 actualSlashed = staking.slashPartial(commitment.maker, intentId, slashAmt);
 
@@ -338,8 +341,12 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         _distributeAttestorRewards(intentId, false, attestorPool);
 
         // Refund taker's escrowed funds
-        // Decrease exposure for the fill amount (slashPartial caps but doesn't clear exposure for the specific fill)
-        staking.decreaseExposure(commitment.maker, order.inputAmount);
+        // Only decrease exposure by what slashPartial's cap didn't already absorb
+        uint256 exposureAfter = staking.getExposure(commitment.maker);
+        uint256 alreadyReduced = exposureBefore - exposureAfter;
+        if (order.inputAmount > alreadyReduced) {
+            staking.decreaseExposure(commitment.maker, order.inputAmount - alreadyReduced);
+        }
         escrow.resolveInvalid(intentId, order);
 
         // Reclaim storage
