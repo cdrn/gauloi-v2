@@ -51,6 +51,10 @@ The taker pays zero gas — they sign an [EIP-712](https://eips.ethereum.org/EIP
 
 **Compliance at the maker level.** Makers screen counterparties and price risk into their spread. The protocol doesn't enforce KYC — it provides the settlement infrastructure, and makers operate within their own regulatory framework.
 
+### Stake capacity and oracle integration
+
+A maker's available fill capacity is not simply their staked amount — it's their stake value adjusted by a Chainlink USDC/USD price feed, minus any outstanding fill exposure. The oracle can only *reduce* capacity below 1:1 (if USDC trades below peg), never inflate it above face value. This prevents a depegging stablecoin from creating phantom capacity. If the oracle feed goes stale (beyond a configurable threshold), capacity queries revert and the maker cannot accept new orders until the feed recovers.
+
 ### Off-chain RFQ flow
 
 ```
@@ -64,25 +68,74 @@ Taker                    Relay                    Maker
   |                        |           executeOrder + fill on dest chain
 ```
 
+The relay is a WebSocket server that connects takers and makers. It broadcasts intents, collects quotes, and notifies the winning maker. The relay is a coordination layer only — it never touches funds and has no privileged access to the contracts. If the relay goes down, makers can still settle directly on-chain.
+
+## Project Structure
+
+```
+contracts/          Foundry (Solidity) — GauloiStaking, GauloiEscrow, GauloiDisputes
+packages/
+  common/           Shared types, ABIs, chain config (single source of truth for addresses)
+  relay/            WebSocket relay server — intent broadcast, quote collection
+  maker/            Maker bot — auto-quote, fill, settle, dispute response
+  cli/              CLI tool for staking, quoting, and admin operations
+app/                Next.js frontend — swap UI, stats dashboard, maker management
+```
+
+## Getting Started
+
+```shell
+pnpm install
+pnpm build
+```
+
+### Run tests
+
+```shell
+cd contracts && forge test      # Solidity unit/integration/gas tests
+```
+
+### Local development
+
+```shell
+# Terminal 1: relay
+cd packages/relay && pnpm dev
+
+# Terminal 2: maker
+cd packages/maker && pnpm dev
+
+# Terminal 3: frontend
+cd app && pnpm dev
+```
+
+Environment variables are configured via `.env.local` files in each package. See `app/.env.example` for the frontend config.
+
 ## Testnet Deployments
 
 ### Sepolia (Chain ID: 11155111)
 
-| Contract | Address | Verified |
-|----------|---------|----------|
-| USDC (Circle) | [`0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`](https://sepolia.etherscan.io/address/0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238) | - |
-| GauloiStaking | [`0xc157d212a20361f8DBD4D6D890Ba19C62E1bf181`](https://sepolia.etherscan.io/address/0xc157d212a20361f8DBD4D6D890Ba19C62E1bf181) | Yes |
-| GauloiEscrow | [`0x61bc65601290bD7CBfF2461a1C2B81d0892064Dd`](https://sepolia.etherscan.io/address/0x61bc65601290bD7CBfF2461a1C2B81d0892064Dd) | Yes |
-| GauloiDisputes | [`0xf9fFa89F4B3d3b63c389D91B06D805534BcE9256`](https://sepolia.etherscan.io/address/0xf9fFa89F4B3d3b63c389D91B06D805534BcE9256) | Yes |
+| Contract | Address |
+|----------|---------|
+| USDC (Circle) | [`0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`](https://sepolia.etherscan.io/address/0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238) |
+| GauloiStaking | [`0x140901e3285c01A051b1E904e4f90e2345bC0F3a`](https://sepolia.etherscan.io/address/0x140901e3285c01A051b1E904e4f90e2345bC0F3a) |
+| GauloiEscrow | [`0xa32D78ac618B41f5E7Ace535b921f1b06D87118E`](https://sepolia.etherscan.io/address/0xa32D78ac618B41f5E7Ace535b921f1b06D87118E) |
+| GauloiDisputes | [`0xb4d5A4ea7D0Ec9A57a07d24f1A51a3Ca7ade526F`](https://sepolia.etherscan.io/address/0xb4d5A4ea7D0Ec9A57a07d24f1A51a3Ca7ade526F) |
 
 ### Arbitrum Sepolia (Chain ID: 421614)
 
-| Contract | Address | Verified |
-|----------|---------|----------|
-| USDC (Circle) | [`0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d`](https://sepolia.arbiscan.io/address/0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d) | - |
-| GauloiStaking | [`0x34C49c7fe668cDdD13a8Af5677d3d71d57eFdddc`](https://sepolia.arbiscan.io/address/0x34C49c7fe668cDdD13a8Af5677d3d71d57eFdddc) | Yes |
-| GauloiEscrow | [`0x94AC29e9888314Bf9Addc60c7CB3FFa876e7565a`](https://sepolia.arbiscan.io/address/0x94AC29e9888314Bf9Addc60c7CB3FFa876e7565a) | Yes |
-| GauloiDisputes | [`0xe2D845c033F8BEF0d10c6c1B06BdE4882f3b0f8a`](https://sepolia.arbiscan.io/address/0xe2D845c033F8BEF0d10c6c1B06BdE4882f3b0f8a) | Yes |
+| Contract | Address |
+|----------|---------|
+| USDC (Circle) | [`0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d`](https://sepolia.arbiscan.io/address/0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d) |
+| GauloiStaking | [`0x845E14C0473356064b6fA7371635F5FAE8AE62B3`](https://sepolia.arbiscan.io/address/0x845E14C0473356064b6fA7371635F5FAE8AE62B3) |
+| GauloiEscrow | [`0x0AE9C298A70f10A217D7b017A7aBF64c9bB52579`](https://sepolia.arbiscan.io/address/0x0AE9C298A70f10A217D7b017A7aBF64c9bB52579) |
+| GauloiDisputes | [`0x877042524F713fa191687A70D6142cbF1C3cfec6`](https://sepolia.arbiscan.io/address/0x877042524F713fa191687A70D6142cbF1C3cfec6) |
+
+### Chainlink Price Feeds (USDC/USD)
+
+| Chain | Feed Address |
+|-------|-------------|
+| Eth Sepolia | [`0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E`](https://sepolia.etherscan.io/address/0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E) |
+| Arbitrum Sepolia | [`0x0153002d20B96532C639313c2d54c3dA09109309`](https://sepolia.arbiscan.io/address/0x0153002d20B96532C639313c2d54c3dA09109309) |
 
 ### Testnet Parameters
 
@@ -94,36 +147,31 @@ Taker                    Relay                    Maker
 | Unstake cooldown | 5 minutes |
 | Dispute resolution window | 5 minutes |
 | Dispute bond | max(0.5% of fill, 0.1 USDC) |
+| Stale price threshold | 24 hours |
 
 ## Gas Costs
 
 Measured with `forge snapshot --match-contract GasBenchmark` (Solc 0.8.24, optimizer 200 runs).
 
-### GauloiStaking
-
-| Operation | Gas |
-|-----------|-----|
-| stake | 102,874 |
-| requestUnstake | 154,772 |
-| completeUnstake | 147,304 |
-
-### GauloiEscrow
-
-| Operation | Gas |
-|-----------|-----|
-| executeOrder | 266,775 |
-| submitFill | 294,406 |
-| settle | 267,147 |
-| settleBatch (5) | 714,276 |
-| settleBatch (10) | 1,270,755 |
-| reclaimExpired | 241,787 |
-
-### GauloiDisputes
-
-| Operation | Gas |
-|-----------|-----|
-| dispute | 780,981 |
-| resolveDispute (1 sig) | 799,226 |
-| finalizeExpiredDispute | 785,231 |
+| Operation | Gas | Amortised |
+|-----------|-----|-----------|
+| stake | 125,495 | — |
+| requestUnstake | 177,327 | — |
+| completeUnstake | 165,823 | — |
+| executeOrder | 296,042 | — |
+| submitFill | 323,655 | — |
+| settle | 296,419 | — |
+| settleBatch (5) | 754,394 | 150,879 |
+| settleBatch (10) | 1,324,458 | 132,446 |
+| reclaimExpired | 265,801 | — |
+| dispute | 811,872 | — |
+| resolveDispute (1 sig) | 863,755 | — |
+| resolveDispute (3 sigs, stake-weighted) | 1,192,166 | — |
+| slashPartial (via resolve) | 880,191 | — |
+| finalizeExpiredDispute | 751,781 | — |
 
 Run `forge snapshot --match-contract GasBenchmark --diff` to check for regressions.
+
+## Design
+
+See `docs/blog-part1-architecture.md` for the full architecture rationale and `docs/blog-part2-mechanism-design.md` for dispute resolution, bond economics, and settlement window analysis.
