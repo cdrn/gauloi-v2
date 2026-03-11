@@ -17,7 +17,7 @@ export const config = getDefaultConfig({
         [arbitrum.id]: http(process.env.NEXT_PUBLIC_ARBITRUM_RPC_URL),
       }
     : {
-        [sepolia.id]: http(process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL),
-        [arbitrumSepolia.id]: http(process.env.NEXT_PUBLIC_ARB_SEPOLIA_RPC_URL),
+        [sepolia.id]: http(process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com"),
+        [arbitrumSepolia.id]: http(process.env.NEXT_PUBLIC_ARB_SEPOLIA_RPC_URL || "https://arbitrum-sepolia-rpc.publicnode.com"),
       },
 });
