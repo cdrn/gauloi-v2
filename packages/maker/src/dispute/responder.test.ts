@@ -71,6 +71,10 @@ function makeDisputeRaisedLog(overrides: Record<string, any> = {}) {
   };
 }
 
+const ZERO_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`;
+
+const INTENT_ID_2 = "0x4444444444444444444444444444444444444444444444444444444444444444" as `0x${string}`;
+
 function createMocks() {
   const futureDeadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
 
@@ -100,6 +104,7 @@ function createMocks() {
       input: makeDisputeTxInput(),
     }),
     watchContractEvent: vi.fn().mockReturnValue(() => {}),
+    waitForTransactionReceipt: vi.fn().mockResolvedValue({ status: "success" }),
   } as any;
 
   const sourceWalletClient = {
@@ -361,5 +366,190 @@ describe("DisputeResponder", () => {
     const tracked = (responder as any).activeDisputes.get(INTENT_ID);
     expect(tracked).toBeDefined();
     expect(tracked.disputeDeadline).toBe(newDeadline);
+  });
+
+  it("processes multiple DisputeRaised logs sequentially (no nonce collision)", async () => {
+    const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
+
+    // Track call order to prove sequential execution
+    const callOrder: string[] = [];
+    const originalWriteContract = sourceWalletClient.writeContract;
+    sourceWalletClient.writeContract = vi.fn().mockImplementation(async (args: any) => {
+      callOrder.push(args.args[0]); // intentId
+      // Simulate tx latency — if concurrent, both would start before either finishes
+      await new Promise((r) => setTimeout(r, 20));
+      return originalWriteContract(args);
+    });
+
+    // Return different commitments per intentId
+    sourcePublicClient.readContract.mockImplementation(({ functionName, args }: any) => {
+      if (functionName === "getCommitment") {
+        return Promise.resolve({
+          fillTxHash: FILL_TX_HASH,
+          maker: OTHER_MAKER,
+          taker: mockOrder.taker,
+          state: 3,
+        });
+      }
+      if (functionName === "getDispute") {
+        return Promise.resolve({
+          intentId: args[0],
+          challenger: CHALLENGER,
+          bondAmount: 100_000n,
+          disputeDeadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
+          resolved: false,
+          fillDeemedValid: false,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    const responder = new DisputeResponder(
+      sourcePublicClient,
+      sourceWalletClient,
+      destPublicClient,
+      DISPUTES,
+      ESCROW,
+      MAKER,
+      CHAIN_ID,
+    );
+
+    const log1 = makeDisputeRaisedLog({ intentId: INTENT_ID });
+    const log2 = makeDisputeRaisedLog({ intentId: INTENT_ID_2 });
+
+    // Enqueue both logs simultaneously (simulates a block with 2 DisputeRaised events)
+    (responder as any).enqueueLog(log1);
+    (responder as any).enqueueLog(log2);
+
+    // Wait for queue to drain
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Both should have been processed
+    expect(sourceWalletClient.writeContract).toHaveBeenCalledTimes(2);
+
+    // Should have been processed in order (sequential, not concurrent)
+    expect(callOrder).toEqual([INTENT_ID, INTENT_ID_2]);
+  });
+
+  it("attests as invalid when fillTxHash is zero (no fill evidence)", async () => {
+    const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
+
+    // Return zero fillTxHash from commitment
+    sourcePublicClient.readContract.mockImplementation(({ functionName }: any) => {
+      if (functionName === "getCommitment") {
+        return Promise.resolve({
+          fillTxHash: ZERO_HASH,
+          maker: OTHER_MAKER,
+          taker: mockOrder.taker,
+          state: 3,
+        });
+      }
+      if (functionName === "getDispute") {
+        return Promise.resolve({
+          intentId: INTENT_ID,
+          challenger: CHALLENGER,
+          bondAmount: 100_000n,
+          disputeDeadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
+          resolved: false,
+          fillDeemedValid: false,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    const responder = new DisputeResponder(
+      sourcePublicClient,
+      sourceWalletClient,
+      destPublicClient,
+      DISPUTES,
+      ESCROW,
+      MAKER,
+      CHAIN_ID,
+    );
+
+    await responder.handleDisputeRaised(makeDisputeRaisedLog());
+
+    // Should NOT try to verify fill on destination chain
+    expect(verifyFillOnDestination).not.toHaveBeenCalled();
+
+    // Should sign attestation with fillValid=false
+    expect(signAttestation).toHaveBeenCalledWith(
+      sourceWalletClient,
+      expect.objectContaining({
+        intentId: INTENT_ID,
+        fillValid: false,
+        fillTxHash: ZERO_HASH,
+      }),
+      DISPUTES,
+      CHAIN_ID,
+    );
+
+    // Should submit on-chain with fillValid=false
+    expect(sourceWalletClient.writeContract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        functionName: "resolveDispute",
+        args: [INTENT_ID, false, expect.any(Array)],
+      }),
+    );
+  });
+
+  it("waits for tx confirmation before re-reading state in finalizeExpiredDisputes", async () => {
+    const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
+
+    const pastDeadline = BigInt(Math.floor(Date.now() / 1000) - 100);
+
+    const responder = new DisputeResponder(
+      sourcePublicClient,
+      sourceWalletClient,
+      destPublicClient,
+      DISPUTES,
+      ESCROW,
+      MAKER,
+      CHAIN_ID,
+    );
+
+    (responder as any).activeDisputes.set(INTENT_ID, {
+      intentId: INTENT_ID,
+      disputeDeadline: pastDeadline,
+      challenger: CHALLENGER,
+      maker: OTHER_MAKER,
+    });
+
+    // Track call ordering to verify waitForTransactionReceipt is called
+    // before the second readContract
+    const callOrder: string[] = [];
+
+    let readCount = 0;
+    sourcePublicClient.readContract.mockImplementation(({ functionName }: any) => {
+      if (functionName === "getDispute") {
+        readCount++;
+        callOrder.push(`readContract:${readCount}`);
+        if (readCount === 1) {
+          return Promise.resolve({ resolved: false, disputeDeadline: pastDeadline });
+        }
+        return Promise.resolve({ resolved: true, disputeDeadline: pastDeadline });
+      }
+      return Promise.resolve(null);
+    });
+
+    sourcePublicClient.waitForTransactionReceipt.mockImplementation(async () => {
+      callOrder.push("waitForTransactionReceipt");
+      return { status: "success" };
+    });
+
+    sourceWalletClient.writeContract.mockImplementation(async () => {
+      callOrder.push("writeContract");
+      return "0xFINALIZE_TX";
+    });
+
+    await responder.finalizeExpiredDisputes();
+
+    // Verify ordering: first read -> writeContract -> waitForReceipt -> second read
+    expect(callOrder).toEqual([
+      "readContract:1",
+      "writeContract",
+      "waitForTransactionReceipt",
+      "readContract:2",
+    ]);
   });
 });

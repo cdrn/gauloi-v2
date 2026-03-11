@@ -22,6 +22,8 @@ interface TrackedDispute {
   maker: `0x${string}`;
 }
 
+const ZERO_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`;
+
 /**
  * Responds to DisputeRaised events by verifying fills, signing attestations,
  * and submitting them on-chain. Also finalizes expired disputes.
@@ -30,6 +32,9 @@ export class DisputeResponder {
   private unwatch: (() => void) | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
   private activeDisputes = new Map<string, TrackedDispute>();
+  // Sequential queue for DisputeRaised logs to avoid nonce collisions
+  private logQueue: Log[] = [];
+  private processing = false;
 
   constructor(
     private sourcePublicClient: PublicClient<Transport, Chain>,
@@ -49,9 +54,7 @@ export class DisputeResponder {
       eventName: "DisputeRaised",
       onLogs: (logs) => {
         for (const log of logs) {
-          this.handleDisputeRaised(log).catch((err) => {
-            console.error("Error handling DisputeRaised:", err);
-          });
+          this.enqueueLog(log);
         }
       },
     });
@@ -76,6 +79,31 @@ export class DisputeResponder {
       this.interval = null;
     }
     console.log("DisputeResponder stopped");
+  }
+
+  private enqueueLog(log: Log): void {
+    this.logQueue.push(log);
+    if (!this.processing) {
+      this.processQueue().catch((err) => {
+        console.error("Error processing dispute log queue:", err);
+      });
+    }
+  }
+
+  private async processQueue(): Promise<void> {
+    this.processing = true;
+    try {
+      while (this.logQueue.length > 0) {
+        const log = this.logQueue.shift()!;
+        try {
+          await this.handleDisputeRaised(log);
+        } catch (err) {
+          console.error("Error handling DisputeRaised:", err);
+        }
+      }
+    } finally {
+      this.processing = false;
+    }
   }
 
   async handleDisputeRaised(log: Log): Promise<void> {
@@ -123,6 +151,35 @@ export class DisputeResponder {
     }
     if (this.makerAddress.toLowerCase() === challenger.toLowerCase()) {
       console.log(`Skipping attestation for ${intentId}: we are the challenger`);
+      return;
+    }
+
+    // No fill evidence submitted — attest as invalid
+    if (fillTxHash === ZERO_HASH) {
+      console.log(`No fill evidence for ${intentId}, attesting as invalid`);
+      const signature = await signAttestation(
+        this.sourceWalletClient,
+        {
+          intentId,
+          fillValid: false,
+          fillTxHash,
+          destinationChainId: 0n,
+        },
+        this.disputesAddress,
+        this.sourceChainId,
+      );
+
+      try {
+        const hash = await this.sourceWalletClient.writeContract({
+          address: this.disputesAddress,
+          abi: GauloiDisputesAbi,
+          functionName: "resolveDispute",
+          args: [intentId, false, [signature]],
+        });
+        console.log(`Attestation (invalid — no fill) submitted for ${intentId}: ${hash}`);
+      } catch (err) {
+        console.error(`Failed to submit attestation for ${intentId}:`, err);
+      }
       return;
     }
 
@@ -220,6 +277,9 @@ export class DisputeResponder {
           args: [intentId as `0x${string}`],
         });
         console.log(`Finalized expired dispute ${intentId}: ${hash}`);
+
+        // Wait for confirmation before re-reading state
+        await this.sourcePublicClient.waitForTransactionReceipt({ hash });
       } catch (err) {
         console.error(`Failed to finalize dispute ${intentId}:`, err);
       }
