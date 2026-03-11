@@ -3,7 +3,6 @@ import {
   type WalletClient,
   type Transport,
   type Chain,
-  type Log,
   decodeFunctionData,
 } from "viem";
 import { type PrivateKeyAccount } from "viem/accounts";
@@ -14,6 +13,16 @@ import {
   signAttestation,
 } from "@gauloi/common";
 import { verifyFillOnDestination } from "./verify-fill.js";
+
+/** Decoded DisputeRaised event log as returned by watchContractEvent */
+export interface DisputeRaisedLog {
+  args: {
+    intentId: `0x${string}`;
+    challenger: `0x${string}`;
+    bondAmount: bigint;
+  };
+  transactionHash: `0x${string}`;
+}
 
 interface TrackedDispute {
   intentId: `0x${string}`;
@@ -54,7 +63,12 @@ export class DisputeResponder {
       eventName: "DisputeRaised",
       onLogs: (logs) => {
         for (const log of logs) {
-          this.enqueueWork(() => this.handleDisputeRaised(log));
+          const args = log.args;
+          if (!args.intentId || !args.challenger) continue;
+          this.enqueueWork(() => this.handleDisputeRaised({
+            args: args as DisputeRaisedLog["args"],
+            transactionHash: log.transactionHash,
+          }));
         }
       },
     });
@@ -104,12 +118,8 @@ export class DisputeResponder {
     }
   }
 
-  async handleDisputeRaised(log: Log): Promise<void> {
-    const args = (log as any).args;
-    if (!args) return;
-
-    const intentId = args.intentId as `0x${string}`;
-    const challenger = args.challenger as `0x${string}`;
+  async handleDisputeRaised(log: DisputeRaisedLog): Promise<void> {
+    const { intentId, challenger } = log.args;
 
     console.log(`DisputeRaised detected: ${intentId} by ${challenger}`);
 
@@ -152,36 +162,8 @@ export class DisputeResponder {
       return;
     }
 
-    // No fill evidence submitted — attest as invalid
-    if (fillTxHash === ZERO_HASH) {
-      console.log(`No fill evidence for ${intentId}, attesting as invalid`);
-      const signature = await signAttestation(
-        this.sourceWalletClient,
-        {
-          intentId,
-          fillValid: false,
-          fillTxHash,
-          destinationChainId: 0n,
-        },
-        this.disputesAddress,
-        this.sourceChainId,
-      );
-
-      try {
-        const hash = await this.sourceWalletClient.writeContract({
-          address: this.disputesAddress,
-          abi: GauloiDisputesAbi,
-          functionName: "resolveDispute",
-          args: [intentId, false, [signature]],
-        });
-        console.log(`Attestation (invalid — no fill) submitted for ${intentId}: ${hash}`);
-      } catch (err) {
-        console.error(`Failed to submit attestation for ${intentId}:`, err);
-      }
-      return;
-    }
-
-    // Decode Order from dispute tx calldata
+    // Decode Order from dispute tx calldata — needed for both attestation paths
+    // because resolveDispute recovers signatures using order.destinationChainId
     const tx = await this.sourcePublicClient.getTransaction({
       hash: log.transactionHash!,
     });
@@ -207,6 +189,35 @@ export class DisputeResponder {
       };
     } catch (err) {
       console.error(`Failed to decode order from dispute tx for ${intentId}:`, err);
+      return;
+    }
+
+    // No fill evidence submitted — attest as invalid
+    if (fillTxHash === ZERO_HASH) {
+      console.log(`No fill evidence for ${intentId}, attesting as invalid`);
+      const signature = await signAttestation(
+        this.sourceWalletClient,
+        {
+          intentId,
+          fillValid: false,
+          fillTxHash,
+          destinationChainId: order.destinationChainId,
+        },
+        this.disputesAddress,
+        this.sourceChainId,
+      );
+
+      try {
+        const hash = await this.sourceWalletClient.writeContract({
+          address: this.disputesAddress,
+          abi: GauloiDisputesAbi,
+          functionName: "resolveDispute",
+          args: [intentId, false, [signature]],
+        });
+        console.log(`Attestation (invalid — no fill) submitted for ${intentId}: ${hash}`);
+      } catch (err) {
+        console.error(`Failed to submit attestation for ${intentId}:`, err);
+      }
       return;
     }
 

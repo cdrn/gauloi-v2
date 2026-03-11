@@ -53,15 +53,7 @@ function makeDisputeTxInput() {
 
 function makeDisputeRaisedLog(overrides: Record<string, any> = {}) {
   return {
-    address: DISPUTES,
-    blockHash: "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`,
-    blockNumber: 100n,
-    data: "0x" as `0x${string}`,
-    topics: [] as [],
-    logIndex: 0,
     transactionHash: "0xDISPUTE_TX_HASH" as `0x${string}`,
-    transactionIndex: 0,
-    removed: false,
     args: {
       intentId: INTENT_ID,
       challenger: CHALLENGER,
@@ -472,13 +464,14 @@ describe("DisputeResponder", () => {
     // Should NOT try to verify fill on destination chain
     expect(verifyFillOnDestination).not.toHaveBeenCalled();
 
-    // Should sign attestation with fillValid=false
+    // Should sign attestation with fillValid=false and the order's real destinationChainId
     expect(signAttestation).toHaveBeenCalledWith(
       sourceWalletClient,
       expect.objectContaining({
         intentId: INTENT_ID,
         fillValid: false,
         fillTxHash: ZERO_HASH,
+        destinationChainId: mockOrder.destinationChainId,
       }),
       DISPUTES,
       CHAIN_ID,
