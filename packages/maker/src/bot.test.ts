@@ -3,22 +3,27 @@ import { MakerBot, type BotConfig } from "./bot.js";
 import type { Order } from "@gauloi/common";
 
 // Mock all dependencies
+const wsInstances: any[] = [];
 vi.mock("ws", () => {
   const handlers = new Map<string, Function[]>();
-  const MockWebSocket = vi.fn().mockImplementation(() => ({
-    on: vi.fn((event: string, handler: Function) => {
-      if (!handlers.has(event)) handlers.set(event, []);
-      handlers.get(event)!.push(handler);
-      // Auto-trigger "open" immediately
-      if (event === "open") setTimeout(() => handler(), 0);
-    }),
-    send: vi.fn(),
-    close: vi.fn(),
-    _handlers: handlers,
-    _emit: (event: string, ...args: any[]) => {
-      for (const h of handlers.get(event) ?? []) h(...args);
-    },
-  }));
+  const MockWebSocket = vi.fn().mockImplementation(() => {
+    const instance = {
+      on: vi.fn((event: string, handler: Function) => {
+        if (!handlers.has(event)) handlers.set(event, []);
+        handlers.get(event)!.push(handler);
+        // Auto-trigger "open" immediately
+        if (event === "open") setTimeout(() => handler(), 0);
+      }),
+      send: vi.fn(),
+      close: vi.fn(),
+      _handlers: handlers,
+      _emit: (event: string, ...args: any[]) => {
+        for (const h of handlers.get(event) ?? []) h(...args);
+      },
+    };
+    wsInstances.push(instance);
+    return instance;
+  });
   return { default: MockWebSocket };
 });
 
@@ -59,8 +64,11 @@ function createMockConfig(): BotConfig {
     account: { address: "0xMAKER" },
   } as any;
 
+  const receiptNotFoundError = new Error("Transaction receipt not found");
+  (receiptNotFoundError as any).name = "TransactionReceiptNotFoundError";
   const destPublicClient = {
     getTransaction: vi.fn().mockResolvedValue({ hash: "0xFILL" }),
+    getTransactionReceipt: vi.fn().mockRejectedValue(receiptNotFoundError),
     waitForTransactionReceipt: vi.fn().mockResolvedValue({}),
   } as any;
 
@@ -74,20 +82,22 @@ function createMockConfig(): BotConfig {
     sourceChain: {
       chainId: 11155111,
       name: "Sepolia",
+      rpcUrl: "http://localhost:8545",
       escrowAddress: "0xESCROW0000000000000000000000000000000000" as `0x${string}`,
       stakingAddress: "0xSTAKING000000000000000000000000000000000" as `0x${string}`,
       disputesAddress: "0xDISPUTE000000000000000000000000000000000" as `0x${string}`,
-      usdcAddress: "0xUSDC00000000000000000000000000000000000000" as `0x${string}`,
       settlementWindow: 3600,
+      commitmentTimeout: 600,
     },
     destChain: {
       chainId: 421614,
       name: "Arb Sepolia",
+      rpcUrl: "http://localhost:8546",
       escrowAddress: "0xESCROW0000000000000000000000000000000001" as `0x${string}`,
       stakingAddress: "0xSTAKING000000000000000000000000000000001" as `0x${string}`,
       disputesAddress: "0xDISPUTE000000000000000000000000000000001" as `0x${string}`,
-      usdcAddress: "0xUSDC00000000000000000000000000000000000001" as `0x${string}`,
       settlementWindow: 3600,
+      commitmentTimeout: 600,
     },
     sourcePublicClient,
     sourceWalletClient,
@@ -233,5 +243,52 @@ describe("MakerBot order cache for disputes", () => {
 
     // Order cache should have been cleaned up on failure
     expect((bot as any).orderCache.get(intentId)).toBeUndefined();
+  });
+});
+
+describe("MakerBot dispute-only mode", () => {
+  beforeEach(() => {
+    wsInstances.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    wsInstances.length = 0;
+  });
+
+  it("does not connect relay, settler, or fill watcher in dispute-only mode", async () => {
+    const config = createMockConfig();
+    config.disputeOnly = true;
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    }));
+
+    // Reset wsInstances right before start to ignore any prior state
+    wsInstances.length = 0;
+
+    const bot = new MakerBot(config);
+    await bot.start();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // WebSocket should NOT have been created (dispute-only skips relay)
+    expect(wsInstances.length).toBe(0);
+
+    // watchContractEvent should have been called once for DisputeResponder's
+    // DisputeRaised watcher, but NOT for the fill watcher (which uses escrow)
+    const watchCalls = (config.sourcePublicClient.watchContractEvent as any).mock.calls;
+    const escrowWatchCalls = watchCalls.filter(
+      (call: any[]) => call[0]?.eventName === "FillSubmitted",
+    );
+    expect(escrowWatchCalls.length).toBe(0);
+
+    // DisputeResponder should be started (watching DisputeRaised)
+    const disputeWatchCalls = watchCalls.filter(
+      (call: any[]) => call[0]?.eventName === "DisputeRaised",
+    );
+    expect(disputeWatchCalls.length).toBe(1);
+
+    bot.stop();
   });
 });

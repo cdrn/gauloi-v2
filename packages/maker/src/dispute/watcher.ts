@@ -3,16 +3,11 @@ import {
   type WalletClient,
   type Transport,
   type Chain,
-  parseAbiItem,
-  decodeEventLog,
 } from "viem";
 import { type PrivateKeyAccount } from "viem/accounts";
 import { GauloiDisputesAbi, type Order } from "@gauloi/common";
 import type { FillSubmittedEvent } from "../chain/watcher.js";
-
-const ERC20_TRANSFER_EVENT = parseAbiItem(
-  "event Transfer(address indexed from, address indexed to, uint256 value)",
-);
+import { verifyFillOnDestination } from "./verify-fill.js";
 
 /**
  * Monitors fills and disputes invalid ones.
@@ -42,52 +37,7 @@ export class DisputeWatcher {
       return false;
     }
 
-    try {
-      const receipt = await this.destPublicClient.getTransactionReceipt({
-        hash: event.fillTxHash,
-      });
-
-      if (receipt.status === "reverted") {
-        return false;
-      }
-
-      // Look for an ERC20 Transfer log on the output token contract
-      // that sends at least minOutputAmount to the destination address
-      for (const log of receipt.logs) {
-        // Skip logs from other contracts
-        if (log.address.toLowerCase() !== order.outputToken.toLowerCase()) {
-          continue;
-        }
-
-        try {
-          const decoded = decodeEventLog({
-            abi: [ERC20_TRANSFER_EVENT],
-            data: log.data,
-            topics: log.topics,
-          });
-
-          if (decoded.eventName !== "Transfer") continue;
-
-          const { to, value } = decoded.args;
-
-          const recipientMatch =
-            to.toLowerCase() === order.destinationAddress.toLowerCase();
-          const amountSufficient = value >= order.minOutputAmount;
-
-          if (recipientMatch && amountSufficient) {
-            return true;
-          }
-        } catch {
-          // Not a Transfer event or wrong ABI — skip
-        }
-      }
-
-      // No matching Transfer log found
-      return false;
-    } catch {
-      // Transaction not found — potentially fraudulent
-      return false;
-    }
+    return verifyFillOnDestination(this.destPublicClient, event.fillTxHash, order);
   }
 
   /**

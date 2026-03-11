@@ -250,9 +250,11 @@ describe("DisputeWatcher.verifyFill", () => {
     expect(result).toBe(false);
   });
 
-  it("returns false when getTransactionReceipt throws", async () => {
+  it("returns false when transaction receipt is not found", async () => {
+    const err = new Error("Transaction receipt not found");
+    (err as any).name = "TransactionReceiptNotFoundError";
     const destPublicClient = {
-      getTransactionReceipt: vi.fn().mockRejectedValue(new Error("not found")),
+      getTransactionReceipt: vi.fn().mockRejectedValue(err),
     } as any;
     const sourceWalletClient = {} as any;
 
@@ -261,6 +263,19 @@ describe("DisputeWatcher.verifyFill", () => {
     const result = await watcher.verifyFill(makeFillEvent(), makeOrder());
 
     expect(result).toBe(false);
+  });
+
+  it("re-throws transient RPC errors", async () => {
+    const destPublicClient = {
+      getTransactionReceipt: vi.fn().mockRejectedValue(new Error("request timeout")),
+    } as any;
+    const sourceWalletClient = {} as any;
+
+    const watcher = new DisputeWatcher(destPublicClient, sourceWalletClient, DISPUTES, MAKER);
+
+    await expect(
+      watcher.verifyFill(makeFillEvent(), makeOrder()),
+    ).rejects.toThrow("request timeout");
   });
 
   it("handles case-insensitive address comparison", async () => {
