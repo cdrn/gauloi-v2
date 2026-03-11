@@ -31,9 +31,9 @@ export const SEPOLIA: ChainConfig = {
   rpcUrl: process.env.SEPOLIA_RPC_URL ?? "",
   settlementWindow: 2 * 60, // 2 minutes (testnet)
   commitmentTimeout: 2 * 60, // 2 minutes
-  escrowAddress: "0x4A01bc51DF2c58C9fCad0413B3417a47bADE0e52",
-  stakingAddress: "0x363531686E6a0B1A52189bE878038075B14cBCcB",
-  disputesAddress: "0x49CFF580Ad8A15B82a22f9376e65Dc9CebFEc94a",
+  escrowAddress: "0xa32D78ac618B41f5E7Ace535b921f1b06D87118E",
+  stakingAddress: "0x140901e3285c01A051b1E904e4f90e2345bC0F3a",
+  disputesAddress: "0xb4d5A4ea7D0Ec9A57a07d24f1A51a3Ca7ade526F",
 };
 
 export const ARBITRUM_SEPOLIA: ChainConfig = {
@@ -42,9 +42,9 @@ export const ARBITRUM_SEPOLIA: ChainConfig = {
   rpcUrl: process.env.ARBITRUM_SEPOLIA_RPC_URL ?? "",
   settlementWindow: 2 * 60, // 2 minutes (testnet)
   commitmentTimeout: 2 * 60, // 2 minutes
-  escrowAddress: "0xf9fFa89F4B3d3b63c389D91B06D805534BcE9256",
-  stakingAddress: "0x61bc65601290bD7CBfF2461a1C2B81d0892064Dd",
-  disputesAddress: "0x9938386603295918D6A4167839297fCB46FaF3E1",
+  escrowAddress: "0x0AE9C298A70f10A217D7b017A7aBF64c9bB52579",
+  stakingAddress: "0x845E14C0473356064b6fA7371635F5FAE8AE62B3",
+  disputesAddress: "0x877042524F713fa191687A70D6142cbF1C3cfec6",
 };
 
 export const SUPPORTED_CHAINS: Record<number, ChainConfig> = {
