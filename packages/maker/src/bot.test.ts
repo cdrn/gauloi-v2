@@ -64,8 +64,11 @@ function createMockConfig(): BotConfig {
     account: { address: "0xMAKER" },
   } as any;
 
+  const receiptNotFoundError = new Error("Transaction receipt not found");
+  (receiptNotFoundError as any).name = "TransactionReceiptNotFoundError";
   const destPublicClient = {
     getTransaction: vi.fn().mockResolvedValue({ hash: "0xFILL" }),
+    getTransactionReceipt: vi.fn().mockRejectedValue(receiptNotFoundError),
     waitForTransactionReceipt: vi.fn().mockResolvedValue({}),
   } as any;
 

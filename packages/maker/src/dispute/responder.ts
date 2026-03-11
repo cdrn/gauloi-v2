@@ -51,6 +51,7 @@ export class DisputeResponder {
   private interval: ReturnType<typeof setInterval> | null = null;
   private activeDisputes = new Map<string, TrackedDispute>();
   private pendingAttestations = new Map<string, PendingAttestation>();
+  private processedIntentIds = new Set<string>();
   // Sequential work queue — all writeContract calls go through here to avoid nonce collisions
   private workQueue: (() => Promise<void>)[] = [];
   private processing = false;
@@ -141,6 +142,12 @@ export class DisputeResponder {
 
   async handleDisputeRaised(log: DisputeRaisedLog): Promise<void> {
     const { intentId, challenger } = log.args;
+
+    if (this.processedIntentIds.has(intentId)) {
+      return;
+    }
+
+    this.processedIntentIds.add(intentId);
 
     console.log(`DisputeRaised detected: ${intentId} by ${challenger}`);
 
@@ -325,6 +332,7 @@ export class DisputeResponder {
 
       if (dispute.resolved) {
         this.activeDisputes.delete(intentId);
+        this.processedIntentIds.delete(intentId);
         continue;
       }
 
@@ -355,6 +363,7 @@ export class DisputeResponder {
 
       if (updated.resolved) {
         this.activeDisputes.delete(intentId);
+        this.processedIntentIds.delete(intentId);
       } else {
         // Quorum extension — update tracked deadline
         tracked.disputeDeadline = updated.disputeDeadline as bigint;

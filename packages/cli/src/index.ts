@@ -60,6 +60,7 @@ program
   .option("--max-fill <usdc>", "Maximum fill size in USDC", "10000")
   .option("--bidirectional", "Run both directions (source→dest and dest→source)")
   .option("--dispute-only", "Run in dispute-only mode (attestation and finalization only)")
+  .option("--dispute-poll-interval <ms>", "Dispute poll interval in ms", "30000")
   .action(runMaker);
 
 program.parse();

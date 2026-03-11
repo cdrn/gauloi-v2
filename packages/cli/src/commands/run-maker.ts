@@ -23,6 +23,7 @@ interface RunMakerOptions {
   maxFill: string;
   bidirectional?: boolean;
   disputeOnly?: boolean;
+  disputePollInterval: string;
 }
 
 function buildBot(
@@ -80,6 +81,7 @@ function buildBot(
       maxFillSize: BigInt(options.maxFill) * 10n ** 6n,
     },
     settleIntervalMs: parseInt(options.settleInterval),
+    disputePollIntervalMs: parseInt(options.disputePollInterval),
     disputeOnly: options.disputeOnly,
   });
 }
@@ -102,8 +104,8 @@ export async function runMaker(options: RunMakerOptions): Promise<void> {
     console.log(`  Relay:        ${options.relay}`);
     console.log(`  Spread:       ${options.spreadClean} bps (clean), ${options.spreadUnknown} bps (unknown)`);
     console.log(`  Max fill:     ${options.maxFill} USDC`);
+    console.log(`  Settle every: ${options.settleInterval}ms`);
   }
-  console.log(`  Settle every: ${options.settleInterval}ms`);
 
   const bots: MakerBot[] = [];
 

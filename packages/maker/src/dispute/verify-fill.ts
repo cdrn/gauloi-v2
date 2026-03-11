@@ -61,8 +61,13 @@ export async function verifyFillOnDestination(
 
     // No matching Transfer log found
     return false;
-  } catch {
-    // Transaction not found — potentially fraudulent
-    return false;
+  } catch (err: any) {
+    // Transaction genuinely not found on-chain — treat as invalid fill
+    if (err?.name === "TransactionReceiptNotFoundError") {
+      return false;
+    }
+    // Transient RPC error (timeout, rate limit, network) — re-throw so
+    // the caller can retry rather than attesting a valid fill as invalid
+    throw err;
   }
 }

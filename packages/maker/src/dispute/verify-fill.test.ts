@@ -140,12 +140,24 @@ describe("verifyFillOnDestination", () => {
     expect(result).toBe(false);
   });
 
-  it("returns false when getTransactionReceipt throws", async () => {
+  it("returns false when transaction receipt is not found", async () => {
+    const err = new Error("Transaction receipt not found");
+    (err as any).name = "TransactionReceiptNotFoundError";
     const client = {
-      getTransactionReceipt: vi.fn().mockRejectedValue(new Error("not found")),
+      getTransactionReceipt: vi.fn().mockRejectedValue(err),
     } as any;
 
     const result = await verifyFillOnDestination(client, "0xFILL_TX", makeOrder());
     expect(result).toBe(false);
+  });
+
+  it("re-throws transient RPC errors instead of returning false", async () => {
+    const client = {
+      getTransactionReceipt: vi.fn().mockRejectedValue(new Error("request timeout")),
+    } as any;
+
+    await expect(
+      verifyFillOnDestination(client, "0xFILL_TX", makeOrder()),
+    ).rejects.toThrow("request timeout");
   });
 });

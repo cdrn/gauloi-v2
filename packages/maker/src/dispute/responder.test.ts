@@ -421,6 +421,31 @@ describe("DisputeResponder", () => {
     expect(callOrder).toEqual([INTENT_ID, INTENT_ID_2]);
   });
 
+  it("skips duplicate DisputeRaised events for the same intentId", async () => {
+    const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
+
+    const responder = new DisputeResponder(
+      sourcePublicClient,
+      sourceWalletClient,
+      destPublicClient,
+      DISPUTES,
+      ESCROW,
+      MAKER,
+      CHAIN_ID,
+    );
+
+    const log = makeDisputeRaisedLog();
+
+    // First call — should process normally
+    await responder.handleDisputeRaised(log);
+    expect(sourceWalletClient.writeContract).toHaveBeenCalledTimes(1);
+
+    // Second call with same intentId — should be skipped
+    sourceWalletClient.writeContract.mockClear();
+    await responder.handleDisputeRaised(log);
+    expect(sourceWalletClient.writeContract).not.toHaveBeenCalled();
+  });
+
   it("attests as invalid when fillTxHash is zero (no fill evidence)", async () => {
     const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
 
