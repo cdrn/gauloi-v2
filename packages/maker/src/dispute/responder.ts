@@ -50,7 +50,6 @@ export class DisputeResponder {
   private interval: ReturnType<typeof setInterval> | null = null;
   private activeDisputes = new Map<string, TrackedDispute>();
   private pendingAttestations = new Map<string, PendingAttestation>();
-  private processedIntentIds = new Set<string>();
   // Sequential work queue — all writeContract calls go through here to avoid nonce collisions
   private workQueue: (() => Promise<void>)[] = [];
   private processing = false;
@@ -142,11 +141,9 @@ export class DisputeResponder {
   async handleDisputeRaised(log: DisputeRaisedLog): Promise<void> {
     const { intentId, challenger } = log.args;
 
-    if (this.processedIntentIds.has(intentId)) {
+    if (this.activeDisputes.has(intentId)) {
       return;
     }
-
-    this.processedIntentIds.add(intentId);
 
     console.log(`DisputeRaised detected: ${intentId} by ${challenger}`);
 
@@ -247,9 +244,10 @@ export class DisputeResponder {
         order,
       );
     } catch (err) {
-      // Transient RPC error — allow retry by removing from dedup set
-      console.error(`Transient error verifying fill for ${intentId}, will retry:`, err);
-      this.processedIntentIds.delete(intentId);
+      // Transient RPC error — dispute is tracked for finalization but attestation is skipped.
+      // If the event is re-delivered (e.g. subscription reconnect), activeDisputes dedup will
+      // block it. The dispute will resolve via expiry finalization.
+      console.error(`Transient error verifying fill for ${intentId}:`, err);
       return;
     }
 
@@ -315,7 +313,6 @@ export class DisputeResponder {
       if (dispute.resolved) {
         console.log(`Dispute ${intentId} already resolved, dropping pending attestation`);
         this.pendingAttestations.delete(intentId);
-        this.processedIntentIds.delete(intentId);
         continue;
       }
 
@@ -341,7 +338,6 @@ export class DisputeResponder {
 
       if (dispute.resolved) {
         this.activeDisputes.delete(intentId);
-        this.processedIntentIds.delete(intentId);
         continue;
       }
 
@@ -372,7 +368,6 @@ export class DisputeResponder {
 
       if (updated.resolved) {
         this.activeDisputes.delete(intentId);
-        this.processedIntentIds.delete(intentId);
       } else {
         // Quorum extension — update tracked deadline
         tracked.disputeDeadline = updated.disputeDeadline as bigint;
