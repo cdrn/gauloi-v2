@@ -418,8 +418,8 @@ describe("DisputeResponder", () => {
     const log2 = makeDisputeRaisedLog({ intentId: INTENT_ID_2 });
 
     // Enqueue both logs simultaneously (simulates a block with 2 DisputeRaised events)
-    (responder as any).enqueueLog(log1);
-    (responder as any).enqueueLog(log2);
+    (responder as any).enqueueWork(() => responder.handleDisputeRaised(log1));
+    (responder as any).enqueueWork(() => responder.handleDisputeRaised(log2));
 
     // Wait for queue to drain
     await new Promise((r) => setTimeout(r, 200));

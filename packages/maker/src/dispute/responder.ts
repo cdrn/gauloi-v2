@@ -32,8 +32,8 @@ export class DisputeResponder {
   private unwatch: (() => void) | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
   private activeDisputes = new Map<string, TrackedDispute>();
-  // Sequential queue for DisputeRaised logs to avoid nonce collisions
-  private logQueue: Log[] = [];
+  // Sequential work queue — all writeContract calls go through here to avoid nonce collisions
+  private workQueue: (() => Promise<void>)[] = [];
   private processing = false;
 
   constructor(
@@ -54,16 +54,14 @@ export class DisputeResponder {
       eventName: "DisputeRaised",
       onLogs: (logs) => {
         for (const log of logs) {
-          this.enqueueLog(log);
+          this.enqueueWork(() => this.handleDisputeRaised(log));
         }
       },
     });
 
-    // Start polling for expired dispute finalization
+    // Start polling for expired dispute finalization (routed through work queue)
     this.interval = setInterval(() => {
-      this.finalizeExpiredDisputes().catch((err) => {
-        console.error("Error finalizing expired disputes:", err);
-      });
+      this.enqueueWork(() => this.finalizeExpiredDisputes());
     }, pollIntervalMs);
 
     console.log("DisputeResponder started");
@@ -81,11 +79,11 @@ export class DisputeResponder {
     console.log("DisputeResponder stopped");
   }
 
-  private enqueueLog(log: Log): void {
-    this.logQueue.push(log);
+  private enqueueWork(fn: () => Promise<void>): void {
+    this.workQueue.push(fn);
     if (!this.processing) {
       this.processQueue().catch((err) => {
-        console.error("Error processing dispute log queue:", err);
+        console.error("Error processing dispute work queue:", err);
       });
     }
   }
@@ -93,12 +91,12 @@ export class DisputeResponder {
   private async processQueue(): Promise<void> {
     this.processing = true;
     try {
-      while (this.logQueue.length > 0) {
-        const log = this.logQueue.shift()!;
+      while (this.workQueue.length > 0) {
+        const work = this.workQueue.shift()!;
         try {
-          await this.handleDisputeRaised(log);
+          await work();
         } catch (err) {
-          console.error("Error handling DisputeRaised:", err);
+          console.error("Error in dispute work queue:", err);
         }
       }
     } finally {
