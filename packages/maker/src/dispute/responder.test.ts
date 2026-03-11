@@ -486,6 +486,96 @@ describe("DisputeResponder", () => {
     );
   });
 
+  it("attests as invalid when verifyFillOnDestination returns false", async () => {
+    const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
+
+    // Fill verification fails
+    (verifyFillOnDestination as any).mockResolvedValue(false);
+
+    const responder = new DisputeResponder(
+      sourcePublicClient,
+      sourceWalletClient,
+      destPublicClient,
+      DISPUTES,
+      ESCROW,
+      MAKER,
+      CHAIN_ID,
+    );
+
+    await responder.handleDisputeRaised(makeDisputeRaisedLog());
+
+    // Should have verified the fill
+    expect(verifyFillOnDestination).toHaveBeenCalled();
+
+    // Should sign attestation with fillValid=false
+    expect(signAttestation).toHaveBeenCalledWith(
+      sourceWalletClient,
+      expect.objectContaining({
+        intentId: INTENT_ID,
+        fillValid: false,
+        fillTxHash: FILL_TX_HASH,
+      }),
+      DISPUTES,
+      CHAIN_ID,
+    );
+
+    // Should submit on-chain with fillValid=false
+    expect(sourceWalletClient.writeContract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        functionName: "resolveDispute",
+        args: [INTENT_ID, false, ["0xMOCK_ATTESTATION_SIG"]],
+      }),
+    );
+  });
+
+  it("returns early when getTransaction fails (cannot decode order)", async () => {
+    const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
+
+    // getTransaction throws (tx not yet indexed)
+    sourcePublicClient.getTransaction.mockRejectedValue(new Error("tx not found"));
+
+    const responder = new DisputeResponder(
+      sourcePublicClient,
+      sourceWalletClient,
+      destPublicClient,
+      DISPUTES,
+      ESCROW,
+      MAKER,
+      CHAIN_ID,
+    );
+
+    await responder.handleDisputeRaised(makeDisputeRaisedLog());
+
+    // Should NOT attempt verification or attestation submission
+    expect(verifyFillOnDestination).not.toHaveBeenCalled();
+    expect(sourceWalletClient.writeContract).not.toHaveBeenCalled();
+  });
+
+  it("still tracks dispute when attestation submission reverts", async () => {
+    const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
+
+    // writeContract reverts
+    sourceWalletClient.writeContract.mockRejectedValue(new Error("execution reverted"));
+
+    const responder = new DisputeResponder(
+      sourcePublicClient,
+      sourceWalletClient,
+      destPublicClient,
+      DISPUTES,
+      ESCROW,
+      MAKER,
+      CHAIN_ID,
+    );
+
+    await responder.handleDisputeRaised(makeDisputeRaisedLog());
+
+    // Attestation was attempted
+    expect(sourceWalletClient.writeContract).toHaveBeenCalled();
+
+    // Dispute should still be tracked for finalization
+    expect((responder as any).activeDisputes.has(INTENT_ID)).toBe(true);
+  });
+
   it("waits for tx confirmation before re-reading state in finalizeExpiredDisputes", async () => {
     const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
 

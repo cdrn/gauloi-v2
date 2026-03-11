@@ -115,6 +115,12 @@ export class DisputeResponder {
       }
     } finally {
       this.processing = false;
+      // Re-check: items may have been enqueued after the while loop drained
+      if (this.workQueue.length > 0) {
+        this.processQueue().catch((err) => {
+          console.error("Error processing dispute work queue:", err);
+        });
+      }
     }
   }
 
@@ -164,12 +170,12 @@ export class DisputeResponder {
 
     // Decode Order from dispute tx calldata — needed for both attestation paths
     // because resolveDispute recovers signatures using order.destinationChainId
-    const tx = await this.sourcePublicClient.getTransaction({
-      hash: log.transactionHash!,
-    });
-
     let order: Order;
     try {
+      const tx = await this.sourcePublicClient.getTransaction({
+        hash: log.transactionHash!,
+      });
+
       const decoded = decodeFunctionData({
         abi: GauloiDisputesAbi,
         data: tx.input,
