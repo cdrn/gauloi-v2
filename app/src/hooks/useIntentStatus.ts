@@ -23,7 +23,7 @@ export function useIntentStatus(
     chainId,
     query: {
       enabled: !!intentId && !!escrowAddress,
-      refetchInterval: 5000,
+      refetchInterval: 2000,
     },
   });
 
