@@ -551,7 +551,7 @@ describe("DisputeResponder", () => {
     expect(sourceWalletClient.writeContract).not.toHaveBeenCalled();
   });
 
-  it("still tracks dispute when attestation submission reverts", async () => {
+  it("still tracks dispute and queues retry when attestation submission reverts", async () => {
     const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
 
     // writeContract reverts
@@ -574,6 +574,183 @@ describe("DisputeResponder", () => {
 
     // Dispute should still be tracked for finalization
     expect((responder as any).activeDisputes.has(INTENT_ID)).toBe(true);
+
+    // Attestation should be queued for retry
+    const pending = (responder as any).pendingAttestations.get(INTENT_ID);
+    expect(pending).toBeDefined();
+    expect(pending.fillValid).toBe(true);
+    expect(pending.retries).toBe(1);
+    expect(pending.signature).toBe("0xMOCK_ATTESTATION_SIG");
+  });
+
+  it("retryPendingAttestations resubmits on next poll", async () => {
+    const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
+
+    const responder = new DisputeResponder(
+      sourcePublicClient,
+      sourceWalletClient,
+      destPublicClient,
+      DISPUTES,
+      ESCROW,
+      MAKER,
+      CHAIN_ID,
+    );
+
+    // Inject a pending attestation (simulating a prior failure)
+    (responder as any).pendingAttestations.set(INTENT_ID, {
+      intentId: INTENT_ID,
+      fillValid: true,
+      signature: "0xMOCK_ATTESTATION_SIG" as `0x${string}`,
+      retries: 1,
+    });
+
+    // Mock dispute as unresolved
+    sourcePublicClient.readContract.mockImplementation(({ functionName }: any) => {
+      if (functionName === "getDispute") {
+        return Promise.resolve({ resolved: false });
+      }
+      return Promise.resolve(null);
+    });
+
+    await responder.retryPendingAttestations();
+
+    // Should have resubmitted
+    expect(sourceWalletClient.writeContract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        functionName: "resolveDispute",
+        args: [INTENT_ID, true, ["0xMOCK_ATTESTATION_SIG"]],
+      }),
+    );
+
+    // Should clear pending on success
+    expect((responder as any).pendingAttestations.has(INTENT_ID)).toBe(false);
+  });
+
+  it("retryPendingAttestations drops attestation if dispute already resolved", async () => {
+    const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
+
+    const responder = new DisputeResponder(
+      sourcePublicClient,
+      sourceWalletClient,
+      destPublicClient,
+      DISPUTES,
+      ESCROW,
+      MAKER,
+      CHAIN_ID,
+    );
+
+    (responder as any).pendingAttestations.set(INTENT_ID, {
+      intentId: INTENT_ID,
+      fillValid: true,
+      signature: "0xMOCK_ATTESTATION_SIG" as `0x${string}`,
+      retries: 1,
+    });
+
+    // Dispute already resolved
+    sourcePublicClient.readContract.mockImplementation(({ functionName }: any) => {
+      if (functionName === "getDispute") {
+        return Promise.resolve({ resolved: true });
+      }
+      return Promise.resolve(null);
+    });
+
+    await responder.retryPendingAttestations();
+
+    // Should NOT attempt resubmission
+    expect(sourceWalletClient.writeContract).not.toHaveBeenCalled();
+
+    // Should clear pending
+    expect((responder as any).pendingAttestations.has(INTENT_ID)).toBe(false);
+  });
+
+  it("gives up after MAX_ATTESTATION_RETRIES", async () => {
+    const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
+
+    // Always revert
+    sourceWalletClient.writeContract.mockRejectedValue(new Error("execution reverted"));
+
+    const responder = new DisputeResponder(
+      sourcePublicClient,
+      sourceWalletClient,
+      destPublicClient,
+      DISPUTES,
+      ESCROW,
+      MAKER,
+      CHAIN_ID,
+    );
+
+    // Inject at retry 5 (MAX_ATTESTATION_RETRIES)
+    (responder as any).pendingAttestations.set(INTENT_ID, {
+      intentId: INTENT_ID,
+      fillValid: true,
+      signature: "0xMOCK_ATTESTATION_SIG" as `0x${string}`,
+      retries: 5,
+    });
+
+    sourcePublicClient.readContract.mockImplementation(({ functionName }: any) => {
+      if (functionName === "getDispute") {
+        return Promise.resolve({ resolved: false });
+      }
+      return Promise.resolve(null);
+    });
+
+    await responder.retryPendingAttestations();
+
+    // Should have attempted but failed
+    expect(sourceWalletClient.writeContract).toHaveBeenCalled();
+
+    // Should be removed after exceeding max retries
+    expect((responder as any).pendingAttestations.has(INTENT_ID)).toBe(false);
+  });
+
+  it("increments retry count on repeated failures", async () => {
+    const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
+
+    // Always revert
+    sourceWalletClient.writeContract.mockRejectedValue(new Error("execution reverted"));
+
+    const responder = new DisputeResponder(
+      sourcePublicClient,
+      sourceWalletClient,
+      destPublicClient,
+      DISPUTES,
+      ESCROW,
+      MAKER,
+      CHAIN_ID,
+    );
+
+    // First failure from handleDisputeRaised
+    await responder.handleDisputeRaised(makeDisputeRaisedLog());
+
+    let pending = (responder as any).pendingAttestations.get(INTENT_ID);
+    expect(pending.retries).toBe(1);
+
+    // Simulate retry via retryPendingAttestations
+    sourcePublicClient.readContract.mockImplementation(({ functionName }: any) => {
+      if (functionName === "getCommitment") {
+        return Promise.resolve({
+          fillTxHash: FILL_TX_HASH,
+          maker: OTHER_MAKER,
+          taker: mockOrder.taker,
+          state: 3,
+        });
+      }
+      if (functionName === "getDispute") {
+        return Promise.resolve({
+          resolved: false,
+          disputeDeadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    await responder.retryPendingAttestations();
+
+    pending = (responder as any).pendingAttestations.get(INTENT_ID);
+    expect(pending.retries).toBe(2);
+
+    // Still tracked
+    expect((responder as any).pendingAttestations.has(INTENT_ID)).toBe(true);
   });
 
   it("waits for tx confirmation before re-reading state in finalizeExpiredDisputes", async () => {

@@ -31,6 +31,15 @@ interface TrackedDispute {
   maker: `0x${string}`;
 }
 
+interface PendingAttestation {
+  intentId: `0x${string}`;
+  fillValid: boolean;
+  signature: `0x${string}`;
+  retries: number;
+}
+
+const MAX_ATTESTATION_RETRIES = 5;
+
 const ZERO_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`;
 
 /**
@@ -41,6 +50,7 @@ export class DisputeResponder {
   private unwatch: (() => void) | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
   private activeDisputes = new Map<string, TrackedDispute>();
+  private pendingAttestations = new Map<string, PendingAttestation>();
   // Sequential work queue — all writeContract calls go through here to avoid nonce collisions
   private workQueue: (() => Promise<void>)[] = [];
   private processing = false;
@@ -73,8 +83,9 @@ export class DisputeResponder {
       },
     });
 
-    // Start polling for expired dispute finalization (routed through work queue)
+    // Start polling for expired dispute finalization and attestation retries
     this.interval = setInterval(() => {
+      this.enqueueWork(() => this.retryPendingAttestations());
       this.enqueueWork(() => this.finalizeExpiredDisputes());
     }, pollIntervalMs);
 
@@ -213,17 +224,7 @@ export class DisputeResponder {
         this.sourceChainId,
       );
 
-      try {
-        const hash = await this.sourceWalletClient.writeContract({
-          address: this.disputesAddress,
-          abi: GauloiDisputesAbi,
-          functionName: "resolveDispute",
-          args: [intentId, false, [signature]],
-        });
-        console.log(`Attestation (invalid — no fill) submitted for ${intentId}: ${hash}`);
-      } catch (err) {
-        console.error(`Failed to submit attestation for ${intentId}:`, err);
-      }
+      await this.submitAttestation(intentId, false, signature);
       return;
     }
 
@@ -249,7 +250,15 @@ export class DisputeResponder {
       this.sourceChainId,
     );
 
-    // Submit on-chain
+    // Submit on-chain (queues for retry on failure)
+    await this.submitAttestation(intentId, fillValid, signature);
+  }
+
+  private async submitAttestation(
+    intentId: `0x${string}`,
+    fillValid: boolean,
+    signature: `0x${string}`,
+  ): Promise<void> {
     try {
       const hash = await this.sourceWalletClient.writeContract({
         address: this.disputesAddress,
@@ -258,8 +267,37 @@ export class DisputeResponder {
         args: [intentId, fillValid, [signature]],
       });
       console.log(`Attestation submitted for ${intentId}: ${hash}`);
+      this.pendingAttestations.delete(intentId);
     } catch (err) {
-      console.error(`Failed to submit attestation for ${intentId}:`, err);
+      const pending = this.pendingAttestations.get(intentId);
+      const retries = pending ? pending.retries + 1 : 1;
+      if (retries > MAX_ATTESTATION_RETRIES) {
+        console.error(`Attestation for ${intentId} failed after ${MAX_ATTESTATION_RETRIES} retries, giving up`);
+        this.pendingAttestations.delete(intentId);
+      } else {
+        console.error(`Failed to submit attestation for ${intentId} (attempt ${retries}/${MAX_ATTESTATION_RETRIES}):`, err);
+        this.pendingAttestations.set(intentId, { intentId, fillValid, signature, retries });
+      }
+    }
+  }
+
+  async retryPendingAttestations(): Promise<void> {
+    for (const [intentId, pending] of this.pendingAttestations) {
+      // Check if dispute is already resolved before retrying
+      const dispute = await this.sourcePublicClient.readContract({
+        address: this.disputesAddress,
+        abi: GauloiDisputesAbi,
+        functionName: "getDispute",
+        args: [intentId as `0x${string}`],
+      }) as any;
+
+      if (dispute.resolved) {
+        console.log(`Dispute ${intentId} already resolved, dropping pending attestation`);
+        this.pendingAttestations.delete(intentId);
+        continue;
+      }
+
+      await this.submitAttestation(pending.intentId, pending.fillValid, pending.signature);
     }
   }
 
