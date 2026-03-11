@@ -551,6 +551,45 @@ describe("DisputeResponder", () => {
     );
   });
 
+  it("clears processedIntentIds on transient RPC error so dispute can be retried", async () => {
+    const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
+
+    // verifyFillOnDestination throws transient error
+    (verifyFillOnDestination as any).mockRejectedValue(new Error("request timeout"));
+
+    const responder = new DisputeResponder(
+      sourcePublicClient,
+      sourceWalletClient,
+      destPublicClient,
+      DISPUTES,
+      ESCROW,
+      MAKER,
+      CHAIN_ID,
+    );
+
+    await responder.handleDisputeRaised(makeDisputeRaisedLog());
+
+    // Should NOT have submitted attestation
+    expect(sourceWalletClient.writeContract).not.toHaveBeenCalled();
+
+    // intentId should be removed from processedIntentIds so it can be retried
+    expect((responder as any).processedIntentIds.has(INTENT_ID)).toBe(false);
+
+    // Dispute should still be tracked for finalization
+    expect((responder as any).activeDisputes.has(INTENT_ID)).toBe(true);
+
+    // Second attempt should succeed (reset mock to return true)
+    (verifyFillOnDestination as any).mockResolvedValue(true);
+    await responder.handleDisputeRaised(makeDisputeRaisedLog());
+
+    expect(sourceWalletClient.writeContract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        functionName: "resolveDispute",
+        args: [INTENT_ID, true, ["0xMOCK_ATTESTATION_SIG"]],
+      }),
+    );
+  });
+
   it("returns early when getTransaction fails (cannot decode order)", async () => {
     const { sourcePublicClient, sourceWalletClient, destPublicClient } = createMocks();
 

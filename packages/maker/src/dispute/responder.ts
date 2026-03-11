@@ -41,7 +41,6 @@ interface PendingAttestation {
 
 const MAX_ATTESTATION_RETRIES = 5;
 
-
 /**
  * Responds to DisputeRaised events by verifying fills, signing attestations,
  * and submitting them on-chain. Also finalizes expired disputes.
@@ -240,11 +239,19 @@ export class DisputeResponder {
     }
 
     // Verify fill on destination chain
-    const fillValid = await verifyFillOnDestination(
-      this.destPublicClient,
-      fillTxHash,
-      order,
-    );
+    let fillValid: boolean;
+    try {
+      fillValid = await verifyFillOnDestination(
+        this.destPublicClient,
+        fillTxHash,
+        order,
+      );
+    } catch (err) {
+      // Transient RPC error — allow retry by removing from dedup set
+      console.error(`Transient error verifying fill for ${intentId}, will retry:`, err);
+      this.processedIntentIds.delete(intentId);
+      return;
+    }
 
     console.log(`Fill verification for ${intentId}: ${fillValid ? "valid" : "invalid"}`);
 
@@ -308,6 +315,7 @@ export class DisputeResponder {
       if (dispute.resolved) {
         console.log(`Dispute ${intentId} already resolved, dropping pending attestation`);
         this.pendingAttestations.delete(intentId);
+        this.processedIntentIds.delete(intentId);
         continue;
       }
 
@@ -317,8 +325,9 @@ export class DisputeResponder {
 
   async finalizeExpiredDisputes(): Promise<void> {
     const now = BigInt(Math.floor(Date.now() / 1000));
+    const entries = [...this.activeDisputes.entries()];
 
-    for (const [intentId, tracked] of this.activeDisputes) {
+    for (const [intentId, tracked] of entries) {
       // Skip if deadline hasn't passed
       if (tracked.disputeDeadline > now) continue;
 
