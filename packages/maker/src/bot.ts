@@ -41,6 +41,7 @@ export interface BotConfig {
   screener?: ComplianceScreener;
   quoterConfig?: Partial<QuoterConfig>;
   settleIntervalMs?: number;
+  disputePollIntervalMs?: number;
   disputeOnly?: boolean;
 }
 
@@ -110,7 +111,7 @@ export class MakerBot {
     this.running = true;
 
     // Always start dispute responder (attestation + finalization)
-    this.disputeResponder.start(this.config.settleIntervalMs ?? 60_000);
+    this.disputeResponder.start(this.config.disputePollIntervalMs ?? 30_000);
 
     if (!this.config.disputeOnly) {
       // Full maker mode: relay + settler + fill watching

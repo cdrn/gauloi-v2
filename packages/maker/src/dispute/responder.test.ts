@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { encodeFunctionData } from "viem";
-import { GauloiDisputesAbi } from "@gauloi/common";
+import { GauloiDisputesAbi, ZERO_BYTES32 } from "@gauloi/common";
 import { DisputeResponder } from "./responder.js";
 
 // Mock signAttestation
@@ -62,8 +62,6 @@ function makeDisputeRaisedLog(overrides: Record<string, any> = {}) {
     },
   };
 }
-
-const ZERO_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`;
 
 const INTENT_ID_2 = "0x4444444444444444444444444444444444444444444444444444444444444444" as `0x${string}`;
 
@@ -430,7 +428,7 @@ describe("DisputeResponder", () => {
     sourcePublicClient.readContract.mockImplementation(({ functionName }: any) => {
       if (functionName === "getCommitment") {
         return Promise.resolve({
-          fillTxHash: ZERO_HASH,
+          fillTxHash: ZERO_BYTES32,
           maker: OTHER_MAKER,
           taker: mockOrder.taker,
           state: 3,
@@ -470,7 +468,7 @@ describe("DisputeResponder", () => {
       expect.objectContaining({
         intentId: INTENT_ID,
         fillValid: false,
-        fillTxHash: ZERO_HASH,
+        fillTxHash: ZERO_BYTES32,
         destinationChainId: mockOrder.destinationChainId,
       }),
       DISPUTES,

@@ -6,6 +6,8 @@ import {
 } from "viem";
 import { type PrivateKeyAccount } from "viem/accounts";
 
+export const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`;
+
 // EIP-712 types for fill attestations — domain includes chainId + verifyingContract
 export const ATTESTATION_TYPES = {
   FillAttestation: [

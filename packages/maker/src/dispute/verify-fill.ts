@@ -45,8 +45,6 @@ export async function verifyFillOnDestination(
           topics: log.topics,
         });
 
-        if (decoded.eventName !== "Transfer") continue;
-
         const { to, value } = decoded.args;
 
         const recipientMatch =

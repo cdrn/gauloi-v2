@@ -11,6 +11,7 @@ import {
   GauloiEscrowAbi,
   type Order,
   signAttestation,
+  ZERO_BYTES32,
 } from "@gauloi/common";
 import { verifyFillOnDestination } from "./verify-fill.js";
 
@@ -40,7 +41,6 @@ interface PendingAttestation {
 
 const MAX_ATTESTATION_RETRIES = 5;
 
-const ZERO_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`;
 
 /**
  * Responds to DisputeRaised events by verifying fills, signing attestations,
@@ -75,6 +75,10 @@ export class DisputeResponder {
         for (const log of logs) {
           const args = log.args;
           if (!args.intentId || !args.challenger) continue;
+          if (!log.transactionHash) {
+            console.warn(`Skipping DisputeRaised log with no transactionHash for ${args.intentId}`);
+            continue;
+          }
           this.enqueueWork(() => this.handleDisputeRaised({
             args: args as DisputeRaisedLog["args"],
             transactionHash: log.transactionHash,
@@ -210,7 +214,7 @@ export class DisputeResponder {
     }
 
     // No fill evidence submitted — attest as invalid
-    if (fillTxHash === ZERO_HASH) {
+    if (fillTxHash === ZERO_BYTES32) {
       console.log(`No fill evidence for ${intentId}, attesting as invalid`);
       const signature = await signAttestation(
         this.sourceWalletClient,
@@ -282,7 +286,10 @@ export class DisputeResponder {
   }
 
   async retryPendingAttestations(): Promise<void> {
-    for (const [intentId, pending] of this.pendingAttestations) {
+    // Snapshot keys to avoid mutating the map during iteration
+    const pendingEntries = [...this.pendingAttestations.entries()];
+
+    for (const [intentId, pending] of pendingEntries) {
       // Check if dispute is already resolved before retrying
       const dispute = await this.sourcePublicClient.readContract({
         address: this.disputesAddress,
@@ -335,6 +342,7 @@ export class DisputeResponder {
         await this.sourcePublicClient.waitForTransactionReceipt({ hash });
       } catch (err) {
         console.error(`Failed to finalize dispute ${intentId}:`, err);
+        continue;
       }
 
       // Re-read dispute — may have been extended (quorum failure)
