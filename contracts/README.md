@@ -60,18 +60,18 @@ See `script/Deploy.s.sol` for configurable parameters (MIN_STAKE, SETTLEMENT_WIN
 | Contract | Address |
 |---|---|
 | USDC | `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` |
-| Staking | `0x363531686E6a0B1A52189bE878038075B14cBCcB` |
-| Escrow | `0x4A01bc51DF2c58C9fCad0413B3417a47bADE0e52` |
-| Disputes | `0x49CFF580Ad8A15B82a22f9376e65Dc9CebFEc94a` |
+| Staking | `0x140901e3285c01A051b1E904e4f90e2345bC0F3a` |
+| Escrow | `0xa32D78ac618B41f5E7Ace535b921f1b06D87118E` |
+| Disputes | `0xb4d5A4ea7D0Ec9A57a07d24f1A51a3Ca7ade526F` |
 
 ### Arbitrum Sepolia (421614)
 
 | Contract | Address |
 |---|---|
 | USDC | `0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d` |
-| Staking | `0x61bc65601290bD7CBfF2461a1C2B81d0892064Dd` |
-| Escrow | `0xf9fFa89F4B3d3b63c389D91B06D805534BcE9256` |
-| Disputes | `0x9938386603295918D6A4167839297fCB46FaF3E1` |
+| Staking | `0x845E14C0473356064b6fA7371635F5FAE8AE62B3` |
+| Escrow | `0x0AE9C298A70f10A217D7b017A7aBF64c9bB52579` |
+| Disputes | `0x877042524F713fa191687A70D6142cbF1C3cfec6` |
 
 ### Chainlink Price Feeds (USDC/USD)
 
@@ -84,12 +84,12 @@ See `script/Deploy.s.sol` for configurable parameters (MIN_STAKE, SETTLEMENT_WIN
 
 | Parameter | Value |
 |---|---|
-| Settlement window | 15 minutes |
-| Commitment timeout | 5 minutes |
-| Min stake | 1 USDC |
-| Unstake cooldown | 48 hours |
-| Dispute resolution window | 24 hours |
-| Dispute bond | max(0.5% of fill, 25 USDC) |
+| Settlement window | 2 minutes |
+| Commitment timeout | 2 minutes |
+| Min stake | 10 USDC |
+| Unstake cooldown | 5 minutes |
+| Dispute resolution window | 5 minutes |
+| Dispute bond | max(0.5% of fill, 0.1 USDC) |
 | Stale price threshold | 24 hours |
 
 See `plan.md` for production target values.
