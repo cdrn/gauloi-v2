@@ -6,17 +6,23 @@ import { UI_CHAINS } from "@/config/chains";
 import { formatUnits } from "viem";
 import { CopyableAddress } from "@/components/CopyableAddress";
 
-function getChainName(chainId: number): string {
-  const chain = UI_CHAINS.find((c) => c.chainId === chainId);
-  return chain?.name ?? `Chain ${chainId}`;
-}
-
 function formatUsdc(raw: string): string {
   if (raw === "0") return "0";
   return Number(formatUnits(BigInt(raw), 6)).toLocaleString(undefined, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds >= 3600) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m > 0 ? (s > 0 ? `${m}m ${s}s` : `${m}m`) : `${s}s`;
 }
 
 function StatCard({ label, value, color = "text-pixel-cyan" }: { label: string; value: string | number; color?: string }) {
@@ -43,14 +49,24 @@ export default function StatsPage() {
   // Aggregate on-chain totals across chains
   let totalOrders = 0;
   let totalSettled = 0;
+  let totalDisputes = 0;
   let totalVolume = 0n;
   let totalStaked = 0n;
 
   for (const chainStats of Object.values(onChain.chains)) {
     totalOrders += chainStats.orderCount;
     totalSettled += chainStats.settledCount;
+    totalDisputes += chainStats.disputeCount;
     if (chainStats.volume !== "0") totalVolume += BigInt(chainStats.volume);
     if (chainStats.totalStaked !== "0") totalStaked += BigInt(chainStats.totalStaked);
+  }
+
+  // Count total online makers from relay
+  let totalOnlineMakers = 0;
+  if (relay) {
+    for (const chain of Object.values(relay.makers)) {
+      totalOnlineMakers += chain.count;
+    }
   }
 
   return (
@@ -68,19 +84,33 @@ export default function StatsPage() {
         <StatCard label="Total Staked" value={formatUsdc(totalStaked.toString())} />
       </div>
 
-      {/* Relay live stats */}
-      {relay && (relay.intents.open > 0 || Object.keys(relay.makers).length > 0) && (
-        <div className="pixel-border bg-navy-900 p-4">
-          <p className="font-pixel text-[10px] text-pixel-cyan uppercase mb-3">Live Relay</p>
-          <div className="flex gap-4">
-            {relay.intents.open > 0 && (
-              <span className="font-pixel text-[8px] text-amber-400">
-                {relay.intents.open} OPEN INTENT{relay.intents.open !== 1 ? "S" : ""}
+      {/* Relay status — always visible */}
+      <div className="pixel-border bg-navy-900 p-4">
+        <p className="font-pixel text-[10px] text-pixel-cyan uppercase mb-3">Live Relay</p>
+        <div className="flex gap-4 flex-wrap">
+          <span className={`font-pixel text-[8px] flex items-center gap-1 ${relay ? "text-pixel-green" : "text-teal-600"}`}>
+            <span className={`w-1.5 h-1.5 inline-block ${relay ? "bg-pixel-green" : "bg-navy-600"}`} />
+            {relay ? "CONNECTED" : "DISCONNECTED"}
+          </span>
+          {relay && (
+            <>
+              <span className="font-pixel text-[8px] text-teal-400">
+                {totalOnlineMakers} MAKER{totalOnlineMakers !== 1 ? "S" : ""} ONLINE
               </span>
-            )}
-          </div>
+              {relay.intents.open > 0 && (
+                <span className="font-pixel text-[8px] text-amber-400">
+                  {relay.intents.open} OPEN INTENT{relay.intents.open !== 1 ? "S" : ""}
+                </span>
+              )}
+              {totalDisputes > 0 && (
+                <span className="font-pixel text-[8px] text-pixel-red">
+                  {totalDisputes} DISPUTE{totalDisputes !== 1 ? "S" : ""}
+                </span>
+              )}
+            </>
+          )}
         </div>
-      )}
+      </div>
 
       {/* Per-chain breakdown */}
       {UI_CHAINS.map((chain) => {
@@ -106,7 +136,7 @@ export default function StatsPage() {
             </div>
 
             {/* Chain metrics */}
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
               <div>
                 <p className="font-pixel text-[7px] text-teal-600 uppercase">Orders</p>
                 <p className="font-pixel text-xs text-pixel-cyan">{chainStats.orderCount}</p>
@@ -116,8 +146,39 @@ export default function StatsPage() {
                 <p className="font-pixel text-xs text-pixel-green">{chainStats.settledCount}</p>
               </div>
               <div>
+                <p className="font-pixel text-[7px] text-teal-600 uppercase">Disputes</p>
+                <p className={`font-pixel text-xs ${chainStats.disputeCount > 0 ? "text-pixel-red" : "text-teal-600"}`}>{chainStats.disputeCount}</p>
+              </div>
+              <div>
                 <p className="font-pixel text-[7px] text-teal-600 uppercase">Volume</p>
                 <p className="font-pixel text-xs text-pixel-cyan">{formatUsdc(chainStats.volume)}</p>
+              </div>
+            </div>
+
+            {/* Protocol parameters */}
+            <div className="bg-navy-800 border-2 border-navy-600 p-3">
+              <p className="font-pixel text-[7px] text-teal-600 uppercase mb-2">Protocol Parameters</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                <div className="flex justify-between">
+                  <span className="font-pixel text-[7px] text-teal-600">Settlement</span>
+                  <span className="font-pixel text-[7px] text-teal-400">{formatDuration(chainStats.params.settlementWindow)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-pixel text-[7px] text-teal-600">Commitment</span>
+                  <span className="font-pixel text-[7px] text-teal-400">{formatDuration(chainStats.params.commitmentTimeout)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-pixel text-[7px] text-teal-600">Dispute Window</span>
+                  <span className="font-pixel text-[7px] text-teal-400">{formatDuration(chainStats.params.disputeResolutionWindow)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-pixel text-[7px] text-teal-600">Cooldown</span>
+                  <span className="font-pixel text-[7px] text-teal-400">{formatDuration(chainStats.params.cooldownPeriod)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-pixel text-[7px] text-teal-600">Min Stake</span>
+                  <span className="font-pixel text-[7px] text-teal-400">{formatUsdc(chainStats.params.minStake)} USDC</span>
+                </div>
               </div>
             </div>
 
@@ -130,17 +191,34 @@ export default function StatsPage() {
                 {chainStats.makers.map((maker) => (
                   <div
                     key={maker.address}
-                    className="bg-navy-800 border-2 border-navy-600 px-3 py-2 flex items-center justify-between"
+                    className="bg-navy-800 border-2 border-navy-600 px-3 py-2 space-y-1"
                   >
-                    <CopyableAddress
-                      address={maker.address}
-                      className="font-mono text-[10px] text-teal-400"
-                    />
-                    <div className="flex items-center gap-2">
-                      <span className="font-pixel text-[8px] text-pixel-cyan">
-                        {formatUsdc(maker.stakedAmount)}
+                    <div className="flex items-center justify-between">
+                      <CopyableAddress
+                        address={maker.address}
+                        className="font-mono text-[10px] text-teal-400"
+                      />
+                      <span className={`font-pixel text-[7px] px-1.5 py-0.5 border ${
+                        maker.isActive
+                          ? "text-pixel-green border-pixel-green"
+                          : "text-pixel-red border-pixel-red"
+                      }`}>
+                        {maker.isActive ? "ACTIVE" : "INACTIVE"}
                       </span>
-                      <span className={`w-1.5 h-1.5 inline-block ${maker.isActive ? "bg-pixel-green" : "bg-navy-600"}`} />
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <p className="font-pixel text-[6px] text-teal-600 uppercase">Staked</p>
+                        <p className="font-pixel text-[8px] text-pixel-cyan">{formatUsdc(maker.stakedAmount)}</p>
+                      </div>
+                      <div>
+                        <p className="font-pixel text-[6px] text-teal-600 uppercase">Exposure</p>
+                        <p className="font-pixel text-[8px] text-pixel-cyan">{formatUsdc(maker.activeExposure)}</p>
+                      </div>
+                      <div>
+                        <p className="font-pixel text-[6px] text-teal-600 uppercase">Capacity</p>
+                        <p className="font-pixel text-[8px] text-pixel-green">{formatUsdc(maker.availableCapacity)}</p>
+                      </div>
                     </div>
                   </div>
                 ))}

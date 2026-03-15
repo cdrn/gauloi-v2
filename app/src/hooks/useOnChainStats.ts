@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { usePublicClient } from "wagmi";
-import { GauloiStakingAbi, GauloiEscrowAbi } from "@gauloi/common";
+import { GauloiStakingAbi, GauloiEscrowAbi, GauloiDisputesAbi } from "@gauloi/common";
 import { UI_CHAINS } from "@/config/chains";
 
 // Approximate blocks per day: Sepolia ~7200, Arb Sepolia ~86400
@@ -14,6 +14,8 @@ const DEFAULT_BLOCKS_7D = 50_400n;
 export interface MakerStake {
   address: string;
   stakedAmount: string;
+  activeExposure: string;
+  availableCapacity: string;
   isActive: boolean;
 }
 
@@ -22,7 +24,15 @@ export interface ChainOnChainStats {
   totalStaked: string;
   orderCount: number;
   settledCount: number;
+  disputeCount: number;
   volume: string;
+  params: {
+    settlementWindow: number;
+    commitmentTimeout: number;
+    minStake: string;
+    cooldownPeriod: number;
+    disputeResolutionWindow: number;
+  };
 }
 
 export interface OnChainStats {
@@ -35,6 +45,7 @@ async function fetchChainStats(
   chainId: number,
   stakingAddress: `0x${string}`,
   escrowAddress: `0x${string}`,
+  disputesAddress: `0x${string}`,
 ): Promise<ChainOnChainStats> {
   // Get current block and compute 7-day lookback
   const currentBlock = await publicClient.getBlockNumber();
@@ -45,8 +56,8 @@ async function fetchChainStats(
   // but we cap to a reasonable range to avoid RPC limits
   const stakedFromBlock = currentBlock > lookback * 4n ? currentBlock - lookback * 4n : 0n;
 
-  // Fetch events in parallel
-  const [stakedLogs, orderLogs, settledLogs] = await Promise.all([
+  // Fetch events and protocol params in parallel
+  const [stakedLogs, orderLogs, settledLogs, disputeLogs, settlementWindow, commitmentTimeout, minStake, cooldownPeriod, disputeResolutionWindow] = await Promise.all([
     publicClient.getContractEvents({
       address: stakingAddress,
       abi: GauloiStakingAbi,
@@ -64,6 +75,37 @@ async function fetchChainStats(
       abi: GauloiEscrowAbi,
       eventName: "IntentSettled",
       fromBlock,
+    }),
+    publicClient.getContractEvents({
+      address: disputesAddress,
+      abi: GauloiDisputesAbi,
+      eventName: "DisputeRaised",
+      fromBlock,
+    }),
+    publicClient.readContract({
+      address: escrowAddress,
+      abi: GauloiEscrowAbi,
+      functionName: "settlementWindow",
+    }),
+    publicClient.readContract({
+      address: escrowAddress,
+      abi: GauloiEscrowAbi,
+      functionName: "commitmentTimeout",
+    }),
+    publicClient.readContract({
+      address: stakingAddress,
+      abi: GauloiStakingAbi,
+      functionName: "minStake",
+    }),
+    publicClient.readContract({
+      address: stakingAddress,
+      abi: GauloiStakingAbi,
+      functionName: "cooldownPeriod",
+    }),
+    publicClient.readContract({
+      address: disputesAddress,
+      abi: GauloiDisputesAbi,
+      functionName: "disputeResolutionWindow",
     }),
   ]);
 
@@ -93,12 +135,16 @@ async function fetchChainStats(
     for (let i = 0; i < makerAddresses.length; i++) {
       const info = makerInfos[i] as any;
       const stakedAmount = info.stakedAmount ?? info[0] ?? 0n;
+      const activeExposure = info.activeExposure ?? info[1] ?? 0n;
       const isActive = info.isActive ?? info[4] ?? false;
+      const capacity = stakedAmount > activeExposure ? stakedAmount - activeExposure : 0n;
 
       if (stakedAmount > 0n) {
         makers.push({
           address: makerAddresses[i],
           stakedAmount: stakedAmount.toString(),
+          activeExposure: activeExposure.toString(),
+          availableCapacity: capacity.toString(),
           isActive,
         });
         totalStaked += stakedAmount;
@@ -117,7 +163,15 @@ async function fetchChainStats(
     totalStaked: totalStaked.toString(),
     orderCount: orderLogs.length,
     settledCount: settledLogs.length,
+    disputeCount: disputeLogs.length,
     volume: volume.toString(),
+    params: {
+      settlementWindow: Number(settlementWindow),
+      commitmentTimeout: Number(commitmentTimeout),
+      minStake: (minStake as bigint).toString(),
+      cooldownPeriod: Number(cooldownPeriod),
+      disputeResolutionWindow: Number(disputeResolutionWindow),
+    },
   };
 }
 
@@ -149,6 +203,7 @@ export function useOnChainStats(intervalMs = 60_000): OnChainStats {
               chain.chainId,
               chain.stakingAddress,
               chain.escrowAddress,
+              chain.disputesAddress,
             );
           } catch (err) {
             console.error(`Failed to fetch on-chain stats for ${chain.name}:`, err);
