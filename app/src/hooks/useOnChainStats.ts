@@ -56,27 +56,33 @@ async function fetchChainStats(
   // but we cap to a reasonable range to avoid RPC limits
   const stakedFromBlock = currentBlock > lookback * 4n ? currentBlock - lookback * 4n : 0n;
 
+  // Helper to safely fetch events (some RPCs fail on addresses with no events)
+  const safeGetEvents = async (opts: any) => {
+    try { return await publicClient.getContractEvents(opts); }
+    catch { return []; }
+  };
+
   // Fetch events and protocol params in parallel
   const [stakedLogs, orderLogs, settledLogs, disputeLogs, settlementWindow, commitmentTimeout, minStake, cooldownPeriod, disputeResolutionWindow] = await Promise.all([
-    publicClient.getContractEvents({
+    safeGetEvents({
       address: stakingAddress,
       abi: GauloiStakingAbi,
       eventName: "Staked",
       fromBlock: stakedFromBlock,
     }),
-    publicClient.getContractEvents({
+    safeGetEvents({
       address: escrowAddress,
       abi: GauloiEscrowAbi,
       eventName: "OrderExecuted",
       fromBlock,
     }),
-    publicClient.getContractEvents({
+    safeGetEvents({
       address: escrowAddress,
       abi: GauloiEscrowAbi,
       eventName: "IntentSettled",
       fromBlock,
     }),
-    publicClient.getContractEvents({
+    safeGetEvents({
       address: disputesAddress,
       abi: GauloiDisputesAbi,
       eventName: "DisputeRaised",
