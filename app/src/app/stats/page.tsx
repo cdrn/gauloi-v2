@@ -28,8 +28,8 @@ function formatDuration(seconds: number): string {
 function StatCard({ label, value, color = "text-pixel-cyan" }: { label: string; value: string | number; color?: string }) {
   return (
     <div className="pixel-border bg-navy-900 p-4">
-      <p className="font-pixel text-[8px] text-teal-600 uppercase mb-1">{label}</p>
-      <p className={`font-pixel text-lg ${color}`}>{value}</p>
+      <p className="font-pixel text-[10px] text-teal-600 uppercase mb-1">{label}</p>
+      <p className={`font-pixel text-xl ${color}`}>{value}</p>
     </div>
   );
 }
@@ -40,7 +40,7 @@ export default function StatsPage() {
 
   if (onChain.loading) {
     return (
-      <div className="pixel-border bg-navy-900 p-6 text-center font-pixel text-[10px] text-teal-600 py-12 animate-pulse">
+      <div className="pixel-border bg-navy-900 p-6 text-center font-pixel text-xs text-teal-600 py-12 animate-pulse">
         LOADING STATS...
       </div>
     );
@@ -72,8 +72,8 @@ export default function StatsPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="font-pixel text-sm text-pixel-cyan">NETWORK STATS</h2>
-        <span className="font-pixel text-[8px] text-teal-600">LAST 7 DAYS</span>
+        <h2 className="font-pixel text-base text-pixel-cyan">NETWORK STATS</h2>
+        <span className="font-pixel text-[10px] text-teal-600">LAST 7 DAYS</span>
       </div>
 
       {/* On-chain aggregate stats */}
@@ -86,24 +86,24 @@ export default function StatsPage() {
 
       {/* Relay status — always visible */}
       <div className="pixel-border bg-navy-900 p-4">
-        <p className="font-pixel text-[10px] text-pixel-cyan uppercase mb-3">Live Relay</p>
+        <p className="font-pixel text-xs text-pixel-cyan uppercase mb-3">Live Relay</p>
         <div className="flex gap-4 flex-wrap">
-          <span className={`font-pixel text-[8px] flex items-center gap-1 ${relay ? "text-pixel-green" : "text-teal-600"}`}>
-            <span className={`w-1.5 h-1.5 inline-block ${relay ? "bg-pixel-green" : "bg-navy-600"}`} />
+          <span className={`font-pixel text-[10px] flex items-center gap-1 ${relay ? "text-pixel-green" : "text-teal-600"}`}>
+            <span className={`w-2 h-2 inline-block ${relay ? "bg-pixel-green" : "bg-navy-600"}`} />
             {relay ? "CONNECTED" : "DISCONNECTED"}
           </span>
           {relay && (
             <>
-              <span className="font-pixel text-[8px] text-teal-400">
+              <span className="font-pixel text-[10px] text-teal-400">
                 {totalOnlineMakers} MAKER{totalOnlineMakers !== 1 ? "S" : ""} ONLINE
               </span>
               {relay.intents.open > 0 && (
-                <span className="font-pixel text-[8px] text-amber-400">
+                <span className="font-pixel text-[10px] text-amber-400">
                   {relay.intents.open} OPEN INTENT{relay.intents.open !== 1 ? "S" : ""}
                 </span>
               )}
               {totalDisputes > 0 && (
-                <span className="font-pixel text-[8px] text-pixel-red">
+                <span className="font-pixel text-[10px] text-pixel-red">
                   {totalDisputes} DISPUTE{totalDisputes !== 1 ? "S" : ""}
                 </span>
               )}
@@ -122,13 +122,13 @@ export default function StatsPage() {
         return (
           <div key={chain.chainId} className="pixel-border bg-navy-900 p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <p className="font-pixel text-[10px] text-pixel-cyan uppercase">
+              <p className="font-pixel text-xs text-pixel-cyan uppercase">
                 {chain.name}
               </p>
               <div className="flex items-center gap-3">
                 {relayMakers && relayMakers.count > 0 && (
-                  <span className="font-pixel text-[8px] text-pixel-green flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 bg-pixel-green inline-block" />
+                  <span className="font-pixel text-[10px] text-pixel-green flex items-center gap-1">
+                    <span className="w-2 h-2 bg-pixel-green inline-block" />
                     {relayMakers.count} ONLINE
                   </span>
                 )}
@@ -138,67 +138,67 @@ export default function StatsPage() {
             {/* Chain metrics */}
             <div className="grid grid-cols-4 gap-2">
               <div>
-                <p className="font-pixel text-[7px] text-teal-600 uppercase">Orders</p>
-                <p className="font-pixel text-xs text-pixel-cyan">{chainStats.orderCount}</p>
+                <p className="font-pixel text-[9px] text-teal-600 uppercase">Orders</p>
+                <p className="font-pixel text-sm text-pixel-cyan">{chainStats.orderCount}</p>
               </div>
               <div>
-                <p className="font-pixel text-[7px] text-teal-600 uppercase">Settled</p>
-                <p className="font-pixel text-xs text-pixel-green">{chainStats.settledCount}</p>
+                <p className="font-pixel text-[9px] text-teal-600 uppercase">Settled</p>
+                <p className="font-pixel text-sm text-pixel-green">{chainStats.settledCount}</p>
               </div>
               <div>
-                <p className="font-pixel text-[7px] text-teal-600 uppercase">Disputes</p>
-                <p className={`font-pixel text-xs ${chainStats.disputeCount > 0 ? "text-pixel-red" : "text-teal-600"}`}>{chainStats.disputeCount}</p>
+                <p className="font-pixel text-[9px] text-teal-600 uppercase">Disputes</p>
+                <p className={`font-pixel text-sm ${chainStats.disputeCount > 0 ? "text-pixel-red" : "text-teal-600"}`}>{chainStats.disputeCount}</p>
               </div>
               <div>
-                <p className="font-pixel text-[7px] text-teal-600 uppercase">Volume</p>
-                <p className="font-pixel text-xs text-pixel-cyan">{formatUsdc(chainStats.volume)}</p>
+                <p className="font-pixel text-[9px] text-teal-600 uppercase">Volume</p>
+                <p className="font-pixel text-sm text-pixel-cyan">{formatUsdc(chainStats.volume)}</p>
               </div>
             </div>
 
             {/* Protocol parameters */}
             <div className="bg-navy-800 border-2 border-navy-600 p-3">
-              <p className="font-pixel text-[7px] text-teal-600 uppercase mb-2">Protocol Parameters</p>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+              <p className="font-pixel text-[9px] text-teal-600 uppercase mb-2">Protocol Parameters</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
                 <div className="flex justify-between">
-                  <span className="font-pixel text-[7px] text-teal-600">Settlement</span>
-                  <span className="font-pixel text-[7px] text-teal-400">{formatDuration(chainStats.params.settlementWindow)}</span>
+                  <span className="font-pixel text-[9px] text-teal-600">Settlement</span>
+                  <span className="font-pixel text-[9px] text-teal-400">{formatDuration(chainStats.params.settlementWindow)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="font-pixel text-[7px] text-teal-600">Commitment</span>
-                  <span className="font-pixel text-[7px] text-teal-400">{formatDuration(chainStats.params.commitmentTimeout)}</span>
+                  <span className="font-pixel text-[9px] text-teal-600">Commitment</span>
+                  <span className="font-pixel text-[9px] text-teal-400">{formatDuration(chainStats.params.commitmentTimeout)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="font-pixel text-[7px] text-teal-600">Dispute Window</span>
-                  <span className="font-pixel text-[7px] text-teal-400">{formatDuration(chainStats.params.disputeResolutionWindow)}</span>
+                  <span className="font-pixel text-[9px] text-teal-600">Dispute Window</span>
+                  <span className="font-pixel text-[9px] text-teal-400">{formatDuration(chainStats.params.disputeResolutionWindow)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="font-pixel text-[7px] text-teal-600">Cooldown</span>
-                  <span className="font-pixel text-[7px] text-teal-400">{formatDuration(chainStats.params.cooldownPeriod)}</span>
+                  <span className="font-pixel text-[9px] text-teal-600">Cooldown</span>
+                  <span className="font-pixel text-[9px] text-teal-400">{formatDuration(chainStats.params.cooldownPeriod)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="font-pixel text-[7px] text-teal-600">Min Stake</span>
-                  <span className="font-pixel text-[7px] text-teal-400">{formatUsdc(chainStats.params.minStake)} USDC</span>
+                  <span className="font-pixel text-[9px] text-teal-600">Min Stake</span>
+                  <span className="font-pixel text-[9px] text-teal-400">{formatUsdc(chainStats.params.minStake)} USDC</span>
                 </div>
               </div>
             </div>
 
             {/* Makers on this chain */}
             {chainStats.makers.length > 0 ? (
-              <div className="space-y-1">
-                <p className="font-pixel text-[7px] text-teal-600 uppercase">
+              <div className="space-y-1.5">
+                <p className="font-pixel text-[9px] text-teal-600 uppercase">
                   Staked Makers ({chainStats.makers.length})
                 </p>
                 {chainStats.makers.map((maker) => (
                   <div
                     key={maker.address}
-                    className="bg-navy-800 border-2 border-navy-600 px-3 py-2 space-y-1"
+                    className="bg-navy-800 border-2 border-navy-600 px-3 py-2 space-y-1.5"
                   >
                     <div className="flex items-center justify-between">
                       <CopyableAddress
                         address={maker.address}
-                        className="font-mono text-[10px] text-teal-400"
+                        className="font-mono text-xs text-teal-400"
                       />
-                      <span className={`font-pixel text-[7px] px-1.5 py-0.5 border ${
+                      <span className={`font-pixel text-[8px] px-1.5 py-0.5 border ${
                         maker.isActive
                           ? "text-pixel-green border-pixel-green"
                           : "text-pixel-red border-pixel-red"
@@ -208,23 +208,23 @@ export default function StatsPage() {
                     </div>
                     <div className="grid grid-cols-3 gap-2">
                       <div>
-                        <p className="font-pixel text-[6px] text-teal-600 uppercase">Staked</p>
-                        <p className="font-pixel text-[8px] text-pixel-cyan">{formatUsdc(maker.stakedAmount)}</p>
+                        <p className="font-pixel text-[8px] text-teal-600 uppercase">Staked</p>
+                        <p className="font-pixel text-[10px] text-pixel-cyan">{formatUsdc(maker.stakedAmount)}</p>
                       </div>
                       <div>
-                        <p className="font-pixel text-[6px] text-teal-600 uppercase">Exposure</p>
-                        <p className="font-pixel text-[8px] text-pixel-cyan">{formatUsdc(maker.activeExposure)}</p>
+                        <p className="font-pixel text-[8px] text-teal-600 uppercase">Exposure</p>
+                        <p className="font-pixel text-[10px] text-pixel-cyan">{formatUsdc(maker.activeExposure)}</p>
                       </div>
                       <div>
-                        <p className="font-pixel text-[6px] text-teal-600 uppercase">Capacity</p>
-                        <p className="font-pixel text-[8px] text-pixel-green">{formatUsdc(maker.availableCapacity)}</p>
+                        <p className="font-pixel text-[8px] text-teal-600 uppercase">Capacity</p>
+                        <p className="font-pixel text-[10px] text-pixel-green">{formatUsdc(maker.availableCapacity)}</p>
                       </div>
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <p className="font-pixel text-[8px] text-teal-600">NO STAKED MAKERS</p>
+              <p className="font-pixel text-[10px] text-teal-600">NO STAKED MAKERS</p>
             )}
           </div>
         );
