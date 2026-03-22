@@ -27,6 +27,19 @@ export const GauloiEscrowAbi = [
   },
   {
     "type": "function",
+    "name": "EMERGENCY_RECLAIM_DELAY",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "addSupportedToken",
     "inputs": [
       {
@@ -159,6 +172,66 @@ export const GauloiEscrowAbi = [
         "internalType": "bytes32"
       }
     ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "emergencyReclaim",
+    "inputs": [
+      {
+        "name": "order",
+        "type": "tuple",
+        "internalType": "struct DataTypes.Order",
+        "components": [
+          {
+            "name": "taker",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "outputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "minOutputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationChainId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationAddress",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "expiry",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
     "stateMutability": "nonpayable"
   },
   {
@@ -852,6 +925,25 @@ export const GauloiEscrowAbi = [
         "name": "newDisputes",
         "type": "address",
         "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "EmergencyReclaimed",
+    "inputs": [
+      {
+        "name": "intentId",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "taker",
+        "type": "address",
+        "indexed": true,
         "internalType": "address"
       }
     ],
