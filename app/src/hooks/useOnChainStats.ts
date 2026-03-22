@@ -11,6 +11,13 @@ const BLOCKS_7D: Record<number, bigint> = {
 };
 const DEFAULT_BLOCKS_7D = 50_400n;
 
+// Max block range per eth_getLogs request — public RPCs reject large ranges
+const MAX_LOG_RANGE: Record<number, bigint> = {
+  11155111: 10_000n,   // Sepolia: conservative for public RPCs
+  421614: 100_000n,    // Arb Sepolia: higher block rate, RPCs handle more
+};
+const DEFAULT_MAX_LOG_RANGE = 10_000n;
+
 export interface MakerStake {
   address: string;
   stakedAmount: string;
@@ -56,38 +63,48 @@ async function fetchChainStats(
   // but we cap to a reasonable range to avoid RPC limits
   const stakedFromBlock = currentBlock > lookback * 4n ? currentBlock - lookback * 4n : 0n;
 
-  // Helper to safely fetch events (some RPCs fail on addresses with no events)
-  const safeGetEvents = async (opts: any) => {
-    try { return await publicClient.getContractEvents(opts); }
-    catch { return []; }
+  // Paginated event fetcher — splits large block ranges into RPC-safe chunks
+  const chunkSize = MAX_LOG_RANGE[chainId] ?? DEFAULT_MAX_LOG_RANGE;
+  const fetchEvents = async (
+    opts: { address: `0x${string}`; abi: any; eventName: string },
+    from: bigint,
+    to: bigint,
+  ) => {
+    if (to - from <= chunkSize) {
+      try {
+        return await publicClient.getContractEvents({ ...opts, fromBlock: from, toBlock: to });
+      } catch {
+        return [];
+      }
+    }
+    const chunks: Promise<any[]>[] = [];
+    for (let start = from; start <= to; start += chunkSize + 1n) {
+      const end = start + chunkSize > to ? to : start + chunkSize;
+      chunks.push(
+        publicClient.getContractEvents({ ...opts, fromBlock: start, toBlock: end }).catch(() => []),
+      );
+    }
+    return (await Promise.all(chunks)).flat();
   };
 
   // Fetch events and protocol params in parallel
   const [stakedLogs, orderLogs, settledLogs, disputeLogs, settlementWindow, commitmentTimeout, minStake, cooldownPeriod, disputeResolutionWindow] = await Promise.all([
-    safeGetEvents({
-      address: stakingAddress,
-      abi: GauloiStakingAbi,
-      eventName: "Staked",
-      fromBlock: stakedFromBlock,
-    }),
-    safeGetEvents({
-      address: escrowAddress,
-      abi: GauloiEscrowAbi,
-      eventName: "OrderExecuted",
-      fromBlock,
-    }),
-    safeGetEvents({
-      address: escrowAddress,
-      abi: GauloiEscrowAbi,
-      eventName: "IntentSettled",
-      fromBlock,
-    }),
-    safeGetEvents({
-      address: disputesAddress,
-      abi: GauloiDisputesAbi,
-      eventName: "DisputeRaised",
-      fromBlock,
-    }),
+    fetchEvents(
+      { address: stakingAddress, abi: GauloiStakingAbi, eventName: "Staked" },
+      stakedFromBlock, currentBlock,
+    ),
+    fetchEvents(
+      { address: escrowAddress, abi: GauloiEscrowAbi, eventName: "OrderExecuted" },
+      fromBlock, currentBlock,
+    ),
+    fetchEvents(
+      { address: escrowAddress, abi: GauloiEscrowAbi, eventName: "IntentSettled" },
+      fromBlock, currentBlock,
+    ),
+    fetchEvents(
+      { address: disputesAddress, abi: GauloiDisputesAbi, eventName: "DisputeRaised" },
+      fromBlock, currentBlock,
+    ),
     publicClient.readContract({
       address: escrowAddress,
       abi: GauloiEscrowAbi,
