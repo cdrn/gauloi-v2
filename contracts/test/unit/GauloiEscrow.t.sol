@@ -341,6 +341,143 @@ contract GauloiEscrowTest is BaseTest {
         escrow.reclaimExpired(order);
     }
 
+    // --- Emergency reclaim ---
+
+    function test_emergencyReclaim_fromCommitted() public {
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+
+        DataTypes.Commitment memory c = escrow.getCommitment(intentId);
+        vm.warp(uint256(c.commitmentDeadline) + escrow.EMERGENCY_RECLAIM_DELAY() + 1);
+
+        uint256 takerBalBefore = usdc.balanceOf(taker);
+
+        vm.prank(taker);
+        escrow.emergencyReclaim(order);
+
+        assertEq(usdc.balanceOf(taker) - takerBalBefore, 10_000e6);
+        assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Expired);
+        assertEq(staking.getMakerInfo(maker1).activeExposure, 0);
+    }
+
+    function test_emergencyReclaim_fromFilled() public {
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+
+        vm.prank(maker1);
+        escrow.submitFill(intentId, keccak256("hash"));
+
+        DataTypes.Commitment memory c = escrow.getCommitment(intentId);
+        vm.warp(uint256(c.commitmentDeadline) + escrow.EMERGENCY_RECLAIM_DELAY() + 1);
+
+        uint256 takerBalBefore = usdc.balanceOf(taker);
+
+        vm.prank(taker);
+        escrow.emergencyReclaim(order);
+
+        assertEq(usdc.balanceOf(taker) - takerBalBefore, 10_000e6);
+        assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Expired);
+        assertEq(staking.getMakerInfo(maker1).activeExposure, 0);
+    }
+
+    function test_emergencyReclaim_fromDisputed() public {
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+
+        vm.prank(maker1);
+        escrow.submitFill(intentId, keccak256("hash"));
+
+        vm.prank(mockDisputes);
+        escrow.setDisputed(intentId);
+
+        DataTypes.Commitment memory c = escrow.getCommitment(intentId);
+        vm.warp(uint256(c.commitmentDeadline) + escrow.EMERGENCY_RECLAIM_DELAY() + 1);
+
+        uint256 takerBalBefore = usdc.balanceOf(taker);
+
+        vm.prank(taker);
+        escrow.emergencyReclaim(order);
+
+        assertEq(usdc.balanceOf(taker) - takerBalBefore, 10_000e6);
+        assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Expired);
+        assertEq(staking.getMakerInfo(maker1).activeExposure, 0);
+    }
+
+    function test_emergencyReclaim_tooEarly_reverts() public {
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+
+        DataTypes.Commitment memory c = escrow.getCommitment(intentId);
+        // Warp to exactly the deadline + delay (not past it)
+        vm.warp(uint256(c.commitmentDeadline) + escrow.EMERGENCY_RECLAIM_DELAY());
+
+        vm.prank(taker);
+        vm.expectRevert("GauloiEscrow: emergency delay not elapsed");
+        escrow.emergencyReclaim(order);
+    }
+
+    function test_emergencyReclaim_notTaker_reverts() public {
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+
+        DataTypes.Commitment memory c = escrow.getCommitment(intentId);
+        vm.warp(uint256(c.commitmentDeadline) + escrow.EMERGENCY_RECLAIM_DELAY() + 1);
+
+        vm.prank(maker1);
+        vm.expectRevert("GauloiEscrow: not taker");
+        escrow.emergencyReclaim(order);
+    }
+
+    function test_emergencyReclaim_alreadySettled_reverts() public {
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+
+        vm.prank(maker1);
+        escrow.submitFill(intentId, keccak256("hash"));
+
+        vm.warp(block.timestamp + SETTLEMENT_WINDOW);
+        escrow.settle(order);
+
+        // Now warp past emergency delay
+        DataTypes.Commitment memory c = escrow.getCommitment(intentId);
+        vm.warp(uint256(c.commitmentDeadline) + escrow.EMERGENCY_RECLAIM_DELAY() + 1);
+
+        vm.prank(taker);
+        vm.expectRevert("GauloiEscrow: already resolved");
+        escrow.emergencyReclaim(order);
+    }
+
+    function test_emergencyReclaim_alreadyExpired_reverts() public {
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+
+        vm.warp(block.timestamp + COMMITMENT_TIMEOUT + 1);
+
+        vm.prank(taker);
+        escrow.reclaimExpired(order);
+
+        // Now warp past emergency delay
+        DataTypes.Commitment memory c = escrow.getCommitment(intentId);
+        vm.warp(uint256(c.commitmentDeadline) + escrow.EMERGENCY_RECLAIM_DELAY() + 1);
+
+        vm.prank(taker);
+        vm.expectRevert("GauloiEscrow: already resolved");
+        escrow.emergencyReclaim(order);
+    }
+
+    function test_emergencyReclaim_worksWhilePaused() public {
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+
+        DataTypes.Commitment memory c = escrow.getCommitment(intentId);
+        vm.warp(uint256(c.commitmentDeadline) + escrow.EMERGENCY_RECLAIM_DELAY() + 1);
+
+        // Pause the escrow
+        vm.prank(mockDisputes);
+        escrow.pause();
+        assertTrue(escrow.paused());
+
+        uint256 takerBalBefore = usdc.balanceOf(taker);
+
+        vm.prank(taker);
+        escrow.emergencyReclaim(order);
+
+        assertEq(usdc.balanceOf(taker) - takerBalBefore, 10_000e6);
+        assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Expired);
+    }
+
     // --- Disputes integration ---
 
     function test_setDisputed() public {

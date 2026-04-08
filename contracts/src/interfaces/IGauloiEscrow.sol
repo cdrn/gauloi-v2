@@ -32,6 +32,7 @@ interface IGauloiEscrow {
     event TokenAdded(address indexed token);
     event TokenRemoved(address indexed token);
     event BatchSettleFailed(bytes32 indexed intentId);
+    event EmergencyReclaimed(bytes32 indexed intentId, address indexed taker);
 
     // Maker executes a taker's signed order (pulls tokens from taker, commits)
     function executeOrder(
@@ -50,6 +51,9 @@ interface IGauloiEscrow {
 
     // Taker reclaims after commitment timeout
     function reclaimExpired(DataTypes.Order calldata order) external;
+
+    // Taker emergency reclaim after EMERGENCY_RECLAIM_DELAY (bypasses pause)
+    function emergencyReclaim(DataTypes.Order calldata order) external;
 
     // --- Pause ---
     function pause() external;

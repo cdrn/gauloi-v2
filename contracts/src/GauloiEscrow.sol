@@ -31,6 +31,8 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
 
     bool public paused;
 
+    uint256 public constant EMERGENCY_RECLAIM_DELAY = 30 days;
+
     modifier whenNotPaused() {
         require(!paused, "GauloiEscrow: paused");
         _;
@@ -238,6 +240,44 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
         try IERC20(order.inputToken).transfer(commitment.taker, order.inputAmount) returns (bool success) {
             if (success) {
                 emit IntentReclaimed(intentId, commitment.taker);
+            } else {
+                emit SettlementTransferFailed(intentId, commitment.taker, order.inputAmount);
+            }
+        } catch {
+            emit SettlementTransferFailed(intentId, commitment.taker, order.inputAmount);
+        }
+    }
+
+    // --- Emergency reclaim ---
+
+    function emergencyReclaim(DataTypes.Order calldata order) external nonReentrant {
+        bytes32 intentId = IntentLib.computeIntentId(order);
+        DataTypes.Commitment storage commitment = _commitments[intentId];
+
+        require(commitment.taker == msg.sender, "GauloiEscrow: not taker");
+
+        // Only non-terminal states
+        require(
+            commitment.state == DataTypes.IntentState.Committed
+            || commitment.state == DataTypes.IntentState.Filled
+            || commitment.state == DataTypes.IntentState.Disputed,
+            "GauloiEscrow: already resolved"
+        );
+
+        require(
+            block.timestamp > uint256(commitment.commitmentDeadline) + EMERGENCY_RECLAIM_DELAY,
+            "GauloiEscrow: emergency delay not elapsed"
+        );
+
+        // Clean up maker exposure
+        staking.decreaseExposure(commitment.maker, order.inputAmount);
+
+        commitment.state = DataTypes.IntentState.Expired;
+
+        // Return tokens to taker
+        try IERC20(order.inputToken).transfer(commitment.taker, order.inputAmount) returns (bool success) {
+            if (success) {
+                emit EmergencyReclaimed(intentId, commitment.taker);
             } else {
                 emit SettlementTransferFailed(intentId, commitment.taker, order.inputAmount);
             }
