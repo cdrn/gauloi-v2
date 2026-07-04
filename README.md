@@ -193,6 +193,8 @@ Environment variables are configured via `.env.local` files in each package. See
 
 ## Testnet Deployments
 
+> **v0.2 redeploy pending.** The addresses below are the **v0.1** deployment (the maker-vote dispute mechanism). The v0.2 stack — Staking, Escrow, Disputes v2, FillRegistry, CouncilResolver — is implemented, hardened, and passing 203 contract tests; the deploy script (`contracts/script/Deploy.s.sol`, run per `memory/deploy-runbook.md`) simulates cleanly end-to-end. It has not yet been broadcast because that requires a funded deployer key. Until the redeploy lands, `packages/common` carries `ZERO_ADDRESS` for `fillRegistryAddress`/`councilAddress` and the v0.1 addresses for the core three.
+
 ### Sepolia (Chain ID: 11155111)
 
 | Contract | Address |
@@ -232,24 +234,23 @@ Environment variables are configured via `.env.local` files in each package. See
 
 ## Gas Costs
 
-Measured with `forge snapshot --match-contract GasBenchmark` (Solc 0.8.24, optimizer 200 runs). Dispute rows reflect the v0.1 vote mechanism and will change with [#54](https://github.com/cdrn/gauloi-v2/issues/54).
+Measured with `forge snapshot --match-contract GasBenchmark` (Solc 0.8.24, optimizer 200 runs). v0.2 dispute flow.
 
 | Operation | Gas | Amortised |
 |-----------|-----|-----------|
-| stake | 125,495 | — |
-| requestUnstake | 177,327 | — |
-| completeUnstake | 165,823 | — |
-| executeOrder | 296,042 | — |
-| submitFill | 323,655 | — |
-| settle | 296,419 | — |
-| settleBatch (5) | 754,394 | 150,879 |
-| settleBatch (10) | 1,324,458 | 132,446 |
-| reclaimExpired | 265,801 | — |
-| dispute | 811,872 | — |
-| resolveDispute (1 sig) | 863,755 | — |
-| resolveDispute (3 sigs, stake-weighted) | 1,192,166 | — |
-| slashPartial (via resolve) | 880,191 | — |
-| finalizeExpiredDispute | 751,781 | — |
+| stake | 125,473 | — |
+| requestUnstake | 177,282 | — |
+| completeUnstake | 165,840 | — |
+| executeOrder | 318,540 | — |
+| submitFill | 350,056 | — |
+| settle | 313,674 | — |
+| settleBatch (5) | 780,793 | 156,159 |
+| settleBatch (10) | 1,371,212 | 137,121 |
+| reclaimExpired | 284,138 | — |
+| challenge | 839,541 | — |
+| resolve (valid, council 1-of-1) | 875,745 | — |
+| resolve (invalid, council 1-of-1) | 892,082 | — |
+| finalizeExpiredDispute | 813,198 | — |
 
 Run `forge snapshot --match-contract GasBenchmark --diff` to check for regressions.
 
