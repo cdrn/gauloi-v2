@@ -10,8 +10,9 @@ import type { FillSubmittedEvent } from "../chain/watcher.js";
 import { verifyFillOnDestination } from "./verify-fill.js";
 
 /**
- * Monitors fills and disputes invalid ones.
- * Verifies destination chain ERC20 Transfer logs match intent parameters.
+ * Monitors fills and challenges invalid ones (v0.2: challenges are
+ * permissionless and bond-gated — no maker stake required to challenge).
+ * Verifies destination chain fills match intent parameters.
  */
 export class DisputeWatcher {
   constructor(
@@ -23,7 +24,7 @@ export class DisputeWatcher {
 
   /**
    * Verify a fill by checking the destination chain tx receipt for a matching
-   * ERC20 Transfer log (correct token, recipient, and amount).
+   * transfer (correct token, recipient, and amount).
    * Returns true if the fill is valid.
    */
   async verifyFill(event: FillSubmittedEvent, order?: Order): Promise<boolean> {
@@ -41,28 +42,28 @@ export class DisputeWatcher {
   }
 
   /**
-   * Raise a dispute for an invalid fill.
-   * Requires the original Order data since dispute() now takes Order calldata.
+   * Challenge an invalid fill (posts the dispute bond).
+   * Requires the original Order data since challenge() takes Order calldata.
    */
-  async dispute(intentId: `0x${string}`, order?: Order): Promise<void> {
+  async challenge(intentId: `0x${string}`, order?: Order): Promise<void> {
     if (!order) {
-      console.error(`Cannot dispute intent ${intentId}: order data not available`);
+      console.error(`Cannot challenge intent ${intentId}: order data not available`);
       return;
     }
 
-    console.log(`Disputing fill for intent ${intentId}...`);
+    console.log(`Challenging fill for intent ${intentId}...`);
 
     try {
       const hash = await this.sourceWalletClient.writeContract({
         address: this.disputesAddress,
         abi: GauloiDisputesAbi,
-        functionName: "dispute",
+        functionName: "challenge",
         args: [order],
       });
 
-      console.log(`Dispute submitted: ${hash}`);
+      console.log(`Challenge submitted: ${hash}`);
     } catch (err) {
-      console.error(`Failed to dispute intent ${intentId}:`, err);
+      console.error(`Failed to challenge intent ${intentId}:`, err);
     }
   }
 }

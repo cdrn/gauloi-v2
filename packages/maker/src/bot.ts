@@ -75,6 +75,7 @@ export class MakerBot {
       config.destPublicClient,
       config.destWalletClient,
       config.sourceChain.escrowAddress,
+      config.destChain.fillRegistryAddress,
     );
 
     this.settler = new Settler(
@@ -104,14 +105,15 @@ export class MakerBot {
       config.sourceChain.escrowAddress,
       config.makerAddress,
       config.sourceChain.chainId,
+      config.sourceChain.councilAddress,
     );
   }
 
   async start(): Promise<void> {
     this.running = true;
 
-    // Always start dispute responder (attestation + finalization)
-    this.disputeResponder.start(this.config.disputePollIntervalMs ?? 30_000);
+    // Always start dispute responder (defense + finalization)
+    await this.disputeResponder.start(this.config.disputePollIntervalMs ?? 30_000);
 
     if (!this.config.disputeOnly) {
       // Full maker mode: relay + settler + fill watching
@@ -124,7 +126,7 @@ export class MakerBot {
         const valid = await this.disputeWatcher.verifyFill(event, order);
         if (!valid) {
           console.log(`Invalid fill detected: ${event.intentId}`);
-          await this.disputeWatcher.dispute(event.intentId, order);
+          await this.disputeWatcher.challenge(event.intentId, order);
         }
       });
     }
@@ -390,6 +392,7 @@ export class MakerBot {
       // 2. Fill on destination chain
       console.log("Filling on destination chain...");
       const fillTxHash = await this.filler.fillOnDestination(
+        intentId as `0x${string}`,
         outputToken as `0x${string}`,
         destinationAddress as `0x${string}`,
         BigInt(minOutputAmount), // Fill at minimum — spread is our profit
@@ -397,10 +400,7 @@ export class MakerBot {
 
       // 3. Submit fill evidence on source chain
       console.log("Submitting fill evidence...");
-      await this.filler.submitFill(
-        intentId as `0x${string}`,
-        fillTxHash,
-      );
+      await this.filler.submitFill(order, fillTxHash);
 
       // 4. Track for settlement
       const disputeWindowEnd =

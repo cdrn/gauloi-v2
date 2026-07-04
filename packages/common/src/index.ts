@@ -7,4 +7,4 @@ export * from "./constants/tokens.js";
 export * from "./client.js";
 export * from "./eip712/quote.js";
 export * from "./eip712/order.js";
-export * from "./eip712/attestation.js";
+export * from "./eip712/council.js";

@@ -69,11 +69,14 @@ function createMockConfig(): BotConfig {
   const destPublicClient = {
     getTransaction: vi.fn().mockResolvedValue({ hash: "0xFILL" }),
     getTransactionReceipt: vi.fn().mockRejectedValue(receiptNotFoundError),
-    waitForTransactionReceipt: vi.fn().mockResolvedValue({}),
+    waitForTransactionReceipt: vi.fn().mockResolvedValue({ transactionHash: "0xDEST_TX" }),
+    // Registry allowance check in Filler.fillOnDestination
+    readContract: vi.fn().mockResolvedValue(2n ** 255n),
   } as any;
 
   const destWalletClient = {
     writeContract: vi.fn().mockResolvedValue("0xDEST_TX"),
+    account: { address: "0xMAKER000000000000000000000000000000000000" },
   } as any;
 
   return {
@@ -86,6 +89,8 @@ function createMockConfig(): BotConfig {
       escrowAddress: "0xESCROW0000000000000000000000000000000000" as `0x${string}`,
       stakingAddress: "0xSTAKING000000000000000000000000000000000" as `0x${string}`,
       disputesAddress: "0xDISPUTE000000000000000000000000000000000" as `0x${string}`,
+      fillRegistryAddress: "0xREGISTRY00000000000000000000000000000000" as `0x${string}`,
+      councilAddress: "0xC0UNCIL000000000000000000000000000000000" as `0x${string}`,
       settlementWindow: 3600,
       commitmentTimeout: 600,
     },
@@ -96,6 +101,8 @@ function createMockConfig(): BotConfig {
       escrowAddress: "0xESCROW0000000000000000000000000000000001" as `0x${string}`,
       stakingAddress: "0xSTAKING000000000000000000000000000000001" as `0x${string}`,
       disputesAddress: "0xDISPUTE000000000000000000000000000000001" as `0x${string}`,
+      fillRegistryAddress: "0xREGISTRY00000000000000000000000000000001" as `0x${string}`,
+      councilAddress: "0xC0UNCIL000000000000000000000000000000001" as `0x${string}`,
       settlementWindow: 3600,
       commitmentTimeout: 600,
     },
@@ -206,7 +213,7 @@ describe("MakerBot order cache for disputes", () => {
     // The dispute watcher should have called writeContract with the cached order
     expect(disputeSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        functionName: "dispute",
+        functionName: "challenge",
         args: [cachedOrder],
       }),
     );

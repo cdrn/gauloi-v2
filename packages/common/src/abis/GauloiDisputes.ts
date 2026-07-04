@@ -33,6 +33,11 @@ export const GauloiDisputesAbi = [
         "internalType": "uint256"
       },
       {
+        "name": "_treasury",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
         "name": "_owner",
         "type": "address",
         "internalType": "address"
@@ -98,7 +103,7 @@ export const GauloiDisputesAbi = [
   },
   {
     "type": "function",
-    "name": "dispute",
+    "name": "challenge",
     "inputs": [
       {
         "name": "order",
@@ -158,6 +163,25 @@ export const GauloiDisputesAbi = [
   },
   {
     "type": "function",
+    "name": "corridorResolutionWindow",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "disputeBondBps",
     "inputs": [],
     "outputs": [
@@ -197,19 +221,6 @@ export const GauloiDisputesAbi = [
   },
   {
     "type": "function",
-    "name": "domainSeparator",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "escrow",
     "inputs": [],
     "outputs": [
@@ -233,30 +244,6 @@ export const GauloiDisputesAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "getAttestorStakeWeight",
-    "inputs": [
-      {
-        "name": "intentId",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "attestor",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -311,31 +298,7 @@ export const GauloiDisputesAbi = [
   },
   {
     "type": "function",
-    "name": "getDisputeAttestors",
-    "inputs": [
-      {
-        "name": "intentId",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "validSide",
-        "type": "bool",
-        "internalType": "bool"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address[]",
-        "internalType": "address[]"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "getQuorumFailCount",
+    "name": "getDisputeOrder",
     "inputs": [
       {
         "name": "intentId",
@@ -346,8 +309,55 @@ export const GauloiDisputesAbi = [
     "outputs": [
       {
         "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
+        "type": "tuple",
+        "internalType": "struct DataTypes.Order",
+        "components": [
+          {
+            "name": "taker",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "outputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "minOutputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationChainId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationAddress",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "expiry",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
       }
     ],
     "stateMutability": "view"
@@ -380,38 +390,6 @@ export const GauloiDisputesAbi = [
   },
   {
     "type": "function",
-    "name": "quorumBps",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "quorumFailCount",
-    "inputs": [
-      {
-        "name": "",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "renounceOwnership",
     "inputs": [],
     "outputs": [],
@@ -419,7 +397,26 @@ export const GauloiDisputesAbi = [
   },
   {
     "type": "function",
-    "name": "resolveDispute",
+    "name": "resolutionWindowFor",
+    "inputs": [
+      {
+        "name": "destinationChainId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "resolve",
     "inputs": [
       {
         "name": "intentId",
@@ -427,14 +424,46 @@ export const GauloiDisputesAbi = [
         "internalType": "bytes32"
       },
       {
-        "name": "fillValid",
-        "type": "bool",
-        "internalType": "bool"
+        "name": "evidence",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "resolvers",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract IResolver"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "setCorridorResolutionWindow",
+    "inputs": [
+      {
+        "name": "destinationChainId",
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        "name": "signatures",
-        "type": "bytes[]",
-        "internalType": "bytes[]"
+        "name": "newWindow",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [],
@@ -473,12 +502,17 @@ export const GauloiDisputesAbi = [
   },
   {
     "type": "function",
-    "name": "setQuorumParams",
+    "name": "setResolver",
     "inputs": [
       {
-        "name": "_quorumBps",
+        "name": "destinationChainId",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "resolver",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -502,6 +536,19 @@ export const GauloiDisputesAbi = [
         "name": "_max",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setTreasury",
+    "inputs": [
+      {
+        "name": "_treasury",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -574,6 +621,19 @@ export const GauloiDisputesAbi = [
   },
   {
     "type": "function",
+    "name": "treasury",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "withdrawTreasury",
     "inputs": [
       {
@@ -589,87 +649,6 @@ export const GauloiDisputesAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
-  },
-  {
-    "type": "event",
-    "name": "AttestorRecorded",
-    "inputs": [
-      {
-        "name": "intentId",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "attestor",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "fillValid",
-        "type": "bool",
-        "indexed": false,
-        "internalType": "bool"
-      },
-      {
-        "name": "stakeWeight",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "AttestorRewardFailed",
-    "inputs": [
-      {
-        "name": "intentId",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "attestor",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "AttestorRewarded",
-    "inputs": [
-      {
-        "name": "intentId",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "attestor",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
   },
   {
     "type": "event",
@@ -746,6 +725,31 @@ export const GauloiDisputesAbi = [
       },
       {
         "name": "reward",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "CorridorResolutionWindowUpdated",
+    "inputs": [
+      {
+        "name": "destinationChainId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "oldValue",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "newValue",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
@@ -843,50 +847,6 @@ export const GauloiDisputesAbi = [
   },
   {
     "type": "event",
-    "name": "QuorumExtended",
-    "inputs": [
-      {
-        "name": "intentId",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "newDeadline",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "failCount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "QuorumUpdated",
-    "inputs": [
-      {
-        "name": "oldValue",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "newValue",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
     "name": "ResolutionWindowUpdated",
     "inputs": [
       {
@@ -900,6 +860,31 @@ export const GauloiDisputesAbi = [
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ResolverUpdated",
+    "inputs": [
+      {
+        "name": "destinationChainId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "oldResolver",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newResolver",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
       }
     ],
     "anonymous": false
@@ -930,31 +915,42 @@ export const GauloiDisputesAbi = [
     "anonymous": false
   },
   {
-    "type": "error",
-    "name": "ECDSAInvalidSignature",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "ECDSAInvalidSignatureLength",
+    "type": "event",
+    "name": "TreasuryTransferFailed",
     "inputs": [
       {
-        "name": "length",
+        "name": "intentId",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "amount",
         "type": "uint256",
+        "indexed": false,
         "internalType": "uint256"
       }
-    ]
+    ],
+    "anonymous": false
   },
   {
-    "type": "error",
-    "name": "ECDSAInvalidSignatureS",
+    "type": "event",
+    "name": "TreasuryUpdated",
     "inputs": [
       {
-        "name": "s",
-        "type": "bytes32",
-        "internalType": "bytes32"
+        "name": "oldTreasury",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "newTreasury",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
       }
-    ]
+    ],
+    "anonymous": false
   },
   {
     "type": "error",

@@ -9,8 +9,10 @@ import { type PrivateKeyAccount } from "viem/accounts";
 import {
   GauloiDisputesAbi,
   GauloiEscrowAbi,
+  CouncilResolverAbi,
   type Order,
-  signAttestation,
+  signCouncilVerdict,
+  encodeCouncilEvidence,
   ZERO_BYTES32,
 } from "@gauloi/common";
 import { verifyFillOnDestination } from "./verify-fill.js";
@@ -32,27 +34,39 @@ interface TrackedDispute {
   maker: `0x${string}`;
 }
 
-interface PendingAttestation {
+interface PendingResolution {
   intentId: `0x${string}`;
-  fillValid: boolean;
-  signature: `0x${string}`;
+  evidence: `0x${string}`;
   retries: number;
 }
 
-const MAX_ATTESTATION_RETRIES = 5;
+const MAX_RESOLUTION_RETRIES = 5;
 
 /**
- * Responds to DisputeRaised events by verifying fills, signing attestations,
- * and submitting them on-chain. Also finalizes expired disputes.
+ * Responds to DisputeRaised events under the v0.2 trust model:
+ *
+ * - A challenged fill unresolved by the deadline resolves INVALID (the maker
+ *   must defend; silence convicts). So when OUR fill is challenged, defending
+ *   is mandatory, not optional.
+ * - Judgment terminates in the corridor's resolver. On council corridors, if
+ *   this bot's account is a council member with a reachable threshold of 1,
+ *   it verifies the fill honestly and submits the verdict itself (bootstrap
+ *   mode). Otherwise it escalates loudly for out-of-band council action.
+ * - Disputes we challenged are finalized after the deadline — finalization
+ *   resolves in the challenger's favor and pays the challenger reward.
+ *
+ * There is no attestation vote in v0.2; that machinery is gone.
  */
 export class DisputeResponder {
   private unwatch: (() => void) | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
   private activeDisputes = new Map<string, TrackedDispute>();
-  private pendingAttestations = new Map<string, PendingAttestation>();
+  private pendingResolutions = new Map<string, PendingResolution>();
   // Sequential work queue — all writeContract calls go through here to avoid nonce collisions
   private workQueue: (() => Promise<void>)[] = [];
   private processing = false;
+  // Whether this bot can act as a 1-of-N council (checked once at start)
+  private canSoloResolve = false;
 
   constructor(
     private sourcePublicClient: PublicClient<Transport, Chain>,
@@ -62,9 +76,18 @@ export class DisputeResponder {
     private escrowAddress: `0x${string}`,
     private makerAddress: `0x${string}`,
     private sourceChainId: number,
+    private councilAddress: `0x${string}` | undefined,
   ) {}
 
-  start(pollIntervalMs: number): void {
+  async start(pollIntervalMs: number): Promise<void> {
+    this.canSoloResolve = await this.checkCouncilMembership();
+    if (this.councilAddress && !this.canSoloResolve) {
+      console.warn(
+        "DisputeResponder: not a solo-capable council member — challenged fills " +
+        "will need out-of-band council signatures to defend",
+      );
+    }
+
     // Subscribe to DisputeRaised events
     this.unwatch = this.sourcePublicClient.watchContractEvent({
       address: this.disputesAddress,
@@ -86,13 +109,13 @@ export class DisputeResponder {
       },
     });
 
-    // Start polling for expired dispute finalization and attestation retries
+    // Poll for resolution retries and expired dispute finalization
     this.interval = setInterval(() => {
-      this.enqueueWork(() => this.retryPendingAttestations());
+      this.enqueueWork(() => this.retryPendingResolutions());
       this.enqueueWork(() => this.finalizeExpiredDisputes());
     }, pollIntervalMs);
 
-    console.log("DisputeResponder started");
+    console.log("DisputeResponder started (v2: defend + finalize)");
   }
 
   stop(): void {
@@ -105,6 +128,30 @@ export class DisputeResponder {
       this.interval = null;
     }
     console.log("DisputeResponder stopped");
+  }
+
+  /** Solo-capable = council member and threshold 1 (bootstrap council) */
+  private async checkCouncilMembership(): Promise<boolean> {
+    if (!this.councilAddress) return false;
+    try {
+      const [isMember, threshold] = await Promise.all([
+        this.sourcePublicClient.readContract({
+          address: this.councilAddress,
+          abi: CouncilResolverAbi,
+          functionName: "isMember",
+          args: [this.makerAddress],
+        }),
+        this.sourcePublicClient.readContract({
+          address: this.councilAddress,
+          abi: CouncilResolverAbi,
+          functionName: "threshold",
+        }),
+      ]);
+      return Boolean(isMember) && (threshold as bigint) === 1n;
+    } catch (err) {
+      console.error("Failed to check council membership:", err);
+      return false;
+    }
   }
 
   private enqueueWork(fn: () => Promise<void>): void {
@@ -153,7 +200,7 @@ export class DisputeResponder {
       abi: GauloiEscrowAbi,
       functionName: "getCommitment",
       args: [intentId],
-    }) as any;
+    });
 
     const fillTxHash = commitment.fillTxHash as `0x${string}`;
     const maker = commitment.maker as `0x${string}`;
@@ -164,11 +211,11 @@ export class DisputeResponder {
       abi: GauloiDisputesAbi,
       functionName: "getDispute",
       args: [intentId],
-    }) as any;
+    });
 
     const disputeDeadline = dispute.disputeDeadline as bigint;
 
-    // Track for finalization regardless of eligibility
+    // Track for finalization regardless of role
     this.activeDisputes.set(intentId, {
       intentId,
       disputeDeadline,
@@ -176,130 +223,139 @@ export class DisputeResponder {
       maker,
     });
 
-    // Eligibility check: skip attestation if we're the disputed maker or challenger
-    if (this.makerAddress.toLowerCase() === maker.toLowerCase()) {
-      console.log(`Skipping attestation for ${intentId}: we are the disputed maker`);
-      return;
-    }
-    if (this.makerAddress.toLowerCase() === challenger.toLowerCase()) {
-      console.log(`Skipping attestation for ${intentId}: we are the challenger`);
-      return;
-    }
+    const weAreMaker = this.makerAddress.toLowerCase() === maker.toLowerCase();
+    const weAreChallenger = this.makerAddress.toLowerCase() === challenger.toLowerCase();
 
-    // Decode Order from dispute tx calldata — needed for both attestation paths
-    // because resolveDispute recovers signatures using order.destinationChainId
-    let order: Order;
-    try {
-      const tx = await this.sourcePublicClient.getTransaction({
-        hash: log.transactionHash!,
-      });
-
-      const decoded = decodeFunctionData({
-        abi: GauloiDisputesAbi,
-        data: tx.input,
-      });
-      // dispute(Order order) — first arg is the order tuple
-      const raw = (decoded.args as any)[0];
-      order = {
-        taker: raw.taker,
-        inputToken: raw.inputToken,
-        inputAmount: raw.inputAmount,
-        outputToken: raw.outputToken,
-        minOutputAmount: raw.minOutputAmount,
-        destinationChainId: raw.destinationChainId,
-        destinationAddress: raw.destinationAddress,
-        expiry: raw.expiry,
-        nonce: raw.nonce,
-      };
-    } catch (err) {
-      console.error(`Failed to decode order from dispute tx for ${intentId}:`, err);
+    if (weAreChallenger) {
+      // Our challenge — the deadline default is in our favor; just finalize later
+      console.log(`Tracking our own challenge ${intentId} for finalization`);
       return;
     }
 
-    // No fill evidence submitted — attest as invalid
-    if (fillTxHash === ZERO_BYTES32) {
-      console.log(`No fill evidence for ${intentId}, attesting as invalid`);
-      const signature = await signAttestation(
-        this.sourceWalletClient,
-        {
-          intentId,
-          fillValid: false,
-          fillTxHash,
-          destinationChainId: order.destinationChainId,
-        },
-        this.disputesAddress,
-        this.sourceChainId,
-      );
-
-      await this.submitAttestation(intentId, false, signature);
+    // The order is stored on-chain by challenge(); read it back for verification
+    const order = await this.readDisputeOrder(intentId, log.transactionHash);
+    if (!order) {
+      if (weAreMaker) {
+        console.error(
+          `CRITICAL: our fill ${intentId} is challenged and the order could not be ` +
+          `recovered — undefended challenges resolve INVALID and slash our stake`,
+        );
+      }
       return;
     }
 
-    // Verify fill on destination chain
+    // Verify the fill honestly — the council must never sign a verdict it
+    // hasn't checked, even (especially) for our own fills
     let fillValid: boolean;
-    try {
-      fillValid = await verifyFillOnDestination(
-        this.destPublicClient,
-        fillTxHash,
-        order,
-      );
-    } catch (err) {
-      // Transient RPC error — dispute is tracked for finalization but attestation is skipped.
-      // If the event is re-delivered (e.g. subscription reconnect), activeDisputes dedup will
-      // block it. The dispute will resolve via expiry finalization.
-      console.error(`Transient error verifying fill for ${intentId}:`, err);
-      return;
+    if (fillTxHash === ZERO_BYTES32) {
+      fillValid = false;
+    } else {
+      try {
+        fillValid = await verifyFillOnDestination(this.destPublicClient, fillTxHash, order);
+      } catch (err) {
+        console.error(`Transient error verifying fill for ${intentId}:`, err);
+        if (weAreMaker) {
+          // Retry via the poll loop rather than dropping — defense is mandatory
+          this.enqueueWork(() => this.handleRedelivery(intentId, log));
+        }
+        return;
+      }
     }
 
     console.log(`Fill verification for ${intentId}: ${fillValid ? "valid" : "invalid"}`);
 
-    // Sign attestation
-    const signature = await signAttestation(
+    if (weAreMaker && !fillValid) {
+      console.error(
+        `CRITICAL: our own challenged fill ${intentId} does not verify — ` +
+        `it will resolve INVALID at the deadline and our stake will be slashed`,
+      );
+      return;
+    }
+
+    if (!this.canSoloResolve) {
+      if (weAreMaker) {
+        console.error(
+          `CRITICAL: our fill ${intentId} is challenged (verified ${fillValid}) but this ` +
+          `bot cannot submit a council verdict — obtain council signatures before ` +
+          `deadline ${disputeDeadline} or the dispute resolves INVALID`,
+        );
+      }
+      return;
+    }
+
+    // Bootstrap council path: sign the verdict and resolve
+    const signature = await signCouncilVerdict(
       this.sourceWalletClient,
-      {
-        intentId,
-        fillValid,
-        fillTxHash,
-        destinationChainId: order.destinationChainId,
-      },
-      this.disputesAddress,
+      { intentId, fillValid, destinationChainId: order.destinationChainId },
+      this.councilAddress!,
       this.sourceChainId,
     );
+    const evidence = encodeCouncilEvidence(fillValid, [signature]);
 
-    // Submit on-chain (queues for retry on failure)
-    await this.submitAttestation(intentId, fillValid, signature);
+    await this.submitResolution(intentId, evidence);
   }
 
-  private async submitAttestation(
+  /** Re-deliver a dispute whose verification hit a transient error */
+  private async handleRedelivery(intentId: `0x${string}`, log: DisputeRaisedLog): Promise<void> {
+    this.activeDisputes.delete(intentId);
+    await this.handleDisputeRaised(log);
+  }
+
+  /** The challenged order is stored on-chain; fall back to challenge-tx calldata */
+  private async readDisputeOrder(
     intentId: `0x${string}`,
-    fillValid: boolean,
-    signature: `0x${string}`,
-  ): Promise<void> {
+    challengeTxHash: `0x${string}`,
+  ): Promise<Order | null> {
+    try {
+      const stored = await this.sourcePublicClient.readContract({
+        address: this.disputesAddress,
+        abi: GauloiDisputesAbi,
+        functionName: "getDisputeOrder",
+        args: [intentId],
+      });
+      if (stored.taker !== "0x0000000000000000000000000000000000000000") {
+        return stored as Order;
+      }
+    } catch {
+      // fall through to calldata decode
+    }
+
+    try {
+      const tx = await this.sourcePublicClient.getTransaction({ hash: challengeTxHash });
+      const decoded = decodeFunctionData({ abi: GauloiDisputesAbi, data: tx.input });
+      if (decoded.functionName !== "challenge") return null;
+      return decoded.args[0] as Order;
+    } catch (err) {
+      console.error(`Failed to recover order for dispute ${intentId}:`, err);
+      return null;
+    }
+  }
+
+  private async submitResolution(intentId: `0x${string}`, evidence: `0x${string}`): Promise<void> {
     try {
       const hash = await this.sourceWalletClient.writeContract({
         address: this.disputesAddress,
         abi: GauloiDisputesAbi,
-        functionName: "resolveDispute",
-        args: [intentId, fillValid, [signature]],
+        functionName: "resolve",
+        args: [intentId, evidence],
       });
-      console.log(`Attestation submitted for ${intentId}: ${hash}`);
-      this.pendingAttestations.delete(intentId);
+      console.log(`Resolution submitted for ${intentId}: ${hash}`);
+      this.pendingResolutions.delete(intentId);
     } catch (err) {
-      const pending = this.pendingAttestations.get(intentId);
+      const pending = this.pendingResolutions.get(intentId);
       const retries = pending ? pending.retries + 1 : 1;
-      if (retries > MAX_ATTESTATION_RETRIES) {
-        console.error(`Attestation for ${intentId} failed after ${MAX_ATTESTATION_RETRIES} retries, giving up`);
-        this.pendingAttestations.delete(intentId);
+      if (retries > MAX_RESOLUTION_RETRIES) {
+        console.error(`Resolution for ${intentId} failed after ${MAX_RESOLUTION_RETRIES} retries, giving up`);
+        this.pendingResolutions.delete(intentId);
       } else {
-        console.error(`Failed to submit attestation for ${intentId} (attempt ${retries}/${MAX_ATTESTATION_RETRIES}):`, err);
-        this.pendingAttestations.set(intentId, { intentId, fillValid, signature, retries });
+        console.error(`Failed to submit resolution for ${intentId} (attempt ${retries}/${MAX_RESOLUTION_RETRIES}):`, err);
+        this.pendingResolutions.set(intentId, { intentId, evidence, retries });
       }
     }
   }
 
-  async retryPendingAttestations(): Promise<void> {
-    // Snapshot keys to avoid mutating the map during iteration
-    const pendingEntries = [...this.pendingAttestations.entries()];
+  async retryPendingResolutions(): Promise<void> {
+    const pendingEntries = [...this.pendingResolutions.entries()];
 
     for (const [intentId, pending] of pendingEntries) {
       // Check if dispute is already resolved before retrying
@@ -308,15 +364,15 @@ export class DisputeResponder {
         abi: GauloiDisputesAbi,
         functionName: "getDispute",
         args: [intentId as `0x${string}`],
-      }) as any;
+      });
 
       if (dispute.resolved) {
-        console.log(`Dispute ${intentId} already resolved, dropping pending attestation`);
-        this.pendingAttestations.delete(intentId);
+        console.log(`Dispute ${intentId} already resolved, dropping pending resolution`);
+        this.pendingResolutions.delete(intentId);
         continue;
       }
 
-      await this.submitAttestation(pending.intentId, pending.fillValid, pending.signature);
+      await this.submitResolution(pending.intentId, pending.evidence);
     }
   }
 
@@ -334,14 +390,14 @@ export class DisputeResponder {
         abi: GauloiDisputesAbi,
         functionName: "getDispute",
         args: [intentId as `0x${string}`],
-      }) as any;
+      });
 
       if (dispute.resolved) {
         this.activeDisputes.delete(intentId);
         continue;
       }
 
-      // Attempt finalization
+      // Attempt finalization — resolves INVALID (maker failed to defend)
       try {
         const hash = await this.sourceWalletClient.writeContract({
           address: this.disputesAddress,
@@ -350,27 +406,10 @@ export class DisputeResponder {
           args: [intentId as `0x${string}`],
         });
         console.log(`Finalized expired dispute ${intentId}: ${hash}`);
-
-        // Wait for confirmation before re-reading state
         await this.sourcePublicClient.waitForTransactionReceipt({ hash });
+        this.activeDisputes.delete(intentId);
       } catch (err) {
         console.error(`Failed to finalize dispute ${intentId}:`, err);
-        continue;
-      }
-
-      // Re-read dispute — may have been extended (quorum failure)
-      const updated = await this.sourcePublicClient.readContract({
-        address: this.disputesAddress,
-        abi: GauloiDisputesAbi,
-        functionName: "getDispute",
-        args: [intentId as `0x${string}`],
-      }) as any;
-
-      if (updated.resolved) {
-        this.activeDisputes.delete(intentId);
-      } else {
-        // Quorum extension — update tracked deadline
-        tracked.disputeDeadline = updated.disputeDeadline as bigint;
       }
     }
   }

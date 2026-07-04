@@ -4,15 +4,17 @@ import {
   type Transport,
   type Chain,
   type Hash,
-  getContract,
+  erc20Abi,
+  maxUint256,
 } from "viem";
 import { type PrivateKeyAccount } from "viem/accounts";
-import { GauloiEscrowAbi, type Order } from "@gauloi/common";
+import { GauloiEscrowAbi, GauloiFillRegistryAbi, type Order } from "@gauloi/common";
 
 /**
  * Handles on-chain operations for the maker:
  * - executeOrder on source chain (pulls tokens from taker, commits)
- * - transfer tokens on destination chain (the actual fill)
+ * - fill through the destination FillRegistry (records the fill as a canonical
+ *   on-chain fact keyed by intentId — one fill per intent, one intent per fill)
  * - submitFill on source chain
  */
 export class Filler {
@@ -22,6 +24,7 @@ export class Filler {
     private destPublic: PublicClient<Transport, Chain>,
     private destWallet: WalletClient<Transport, Chain, PrivateKeyAccount>,
     private escrowAddress: `0x${string}`,
+    private destFillRegistryAddress: `0x${string}`,
   ) {}
 
   async executeOrder(order: Order, takerSignature: `0x${string}`): Promise<Hash> {
@@ -37,49 +40,57 @@ export class Filler {
   }
 
   /**
-   * Execute the fill on the destination chain.
-   * For v0.1 this is a simple ERC20 transfer.
+   * Execute the fill on the destination chain through the FillRegistry.
+   * The registry transfers the tokens and records the fill against the intentId.
    */
   async fillOnDestination(
+    intentId: `0x${string}`,
     outputToken: `0x${string}`,
     destinationAddress: `0x${string}`,
     outputAmount: bigint,
   ): Promise<Hash> {
-    // Standard ERC20 transfer
+    await this.ensureRegistryAllowance(outputToken, outputAmount);
+
     const hash = await this.destWallet.writeContract({
-      address: outputToken,
-      abi: [
-        {
-          type: "function",
-          name: "transfer",
-          inputs: [
-            { name: "to", type: "address" },
-            { name: "amount", type: "uint256" },
-          ],
-          outputs: [{ type: "bool" }],
-          stateMutability: "nonpayable",
-        },
-      ] as const,
-      functionName: "transfer",
-      args: [destinationAddress, outputAmount],
+      address: this.destFillRegistryAddress,
+      abi: GauloiFillRegistryAbi,
+      functionName: "fill",
+      args: [intentId, outputToken, destinationAddress, outputAmount],
     });
 
     const receipt = await this.destPublic.waitForTransactionReceipt({ hash });
     return receipt.transactionHash;
   }
 
-  async submitFill(
-    intentId: `0x${string}`,
-    destinationTxHash: `0x${string}`,
-  ): Promise<Hash> {
+  async submitFill(order: Order, destinationTxHash: `0x${string}`): Promise<Hash> {
     const hash = await this.sourceWallet.writeContract({
       address: this.escrowAddress,
       abi: GauloiEscrowAbi,
       functionName: "submitFill",
-      args: [intentId, destinationTxHash],
+      args: [order, destinationTxHash],
     });
 
     await this.sourcePublic.waitForTransactionReceipt({ hash });
     return hash;
+  }
+
+  /** Approve the registry once (max) per output token, only when needed */
+  private async ensureRegistryAllowance(token: `0x${string}`, amount: bigint): Promise<void> {
+    const allowance = await this.destPublic.readContract({
+      address: token,
+      abi: erc20Abi,
+      functionName: "allowance",
+      args: [this.destWallet.account.address, this.destFillRegistryAddress],
+    });
+
+    if (allowance >= amount) return;
+
+    const hash = await this.destWallet.writeContract({
+      address: token,
+      abi: erc20Abi,
+      functionName: "approve",
+      args: [this.destFillRegistryAddress, maxUint256],
+    });
+    await this.destPublic.waitForTransactionReceipt({ hash });
   }
 }
