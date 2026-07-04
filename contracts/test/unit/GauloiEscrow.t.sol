@@ -220,8 +220,10 @@ contract GauloiEscrowTest is BaseTest {
         (, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
         order.inputAmount = 20_000e6; // tamper
 
+        // Tampered order → different intentId → empty commitment. The default
+        // state enum (0) is Committed, so the maker check is what rejects it.
         vm.prank(maker1);
-        vm.expectRevert("GauloiEscrow: not committed");
+        vm.expectRevert("GauloiEscrow: not committed maker");
         escrow.submitFill(order, keccak256("hash"));
     }
 
