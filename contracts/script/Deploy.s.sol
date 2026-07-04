@@ -68,6 +68,7 @@ contract Deploy is Script {
             vm.envOr("RESOLUTION_WINDOW", uint256(24 hours)),
             vm.envOr("BOND_BPS", uint256(200)),
             vm.envOr("MIN_BOND", uint256(250e6)),
+            vm.envOr("TREASURY", owner),
             owner
         );
     }

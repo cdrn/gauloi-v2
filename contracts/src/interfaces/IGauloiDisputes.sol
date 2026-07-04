@@ -9,36 +9,28 @@ interface IGauloiDisputes {
     event DisputeResolved(bytes32 indexed intentId, bool fillValid);
     event ChallengerRewarded(address indexed challenger, uint256 reward);
     event ChallengerBondSlashed(address indexed challenger, uint256 amount);
-    event AttestorRecorded(bytes32 indexed intentId, address indexed attestor, bool fillValid, uint256 stakeWeight);
-    event QuorumExtended(bytes32 indexed intentId, uint256 newDeadline, uint256 failCount);
-    event AttestorRewarded(bytes32 indexed intentId, address indexed attestor, uint256 amount);
-    event AttestorRewardFailed(bytes32 indexed intentId, address indexed attestor, uint256 amount);
     event MakerRewardFailed(bytes32 indexed intentId, address indexed maker, uint256 amount);
     event ChallengerRewardFailed(bytes32 indexed intentId, address indexed challenger, uint256 amount);
+    event TreasuryTransferFailed(bytes32 indexed intentId, uint256 amount);
     event ResolutionWindowUpdated(uint256 oldValue, uint256 newValue);
     event BondParamsUpdated(uint256 newBps, uint256 newMinBond);
     event SlashCurveUpdated(uint256 base, uint256 k, uint256 max);
-    event QuorumUpdated(uint256 oldValue, uint256 newValue);
+    event ResolverUpdated(uint256 indexed destinationChainId, address indexed oldResolver, address indexed newResolver);
+    event TreasuryUpdated(address oldTreasury, address newTreasury);
 
-    // Any staked maker disputes a fill (stores order for later resolution)
-    function dispute(DataTypes.Order calldata order) external;
+    // Anyone challenges a fill claim by posting a bond (permissionless)
+    function challenge(DataTypes.Order calldata order) external;
 
-    // Resolve via stake-weighted EIP-712 signatures from staked makers
-    function resolveDispute(
-        bytes32 intentId,
-        bool fillValid,
-        bytes[] calldata signatures
-    ) external;
+    // Resolve via the corridor's terminal resolver; evidence is resolver-specific
+    function resolve(bytes32 intentId, bytes calldata evidence) external;
 
-    // Finalize unresolved dispute after deadline
+    // Past the deadline with no verdict, the maker failed to defend: fill invalid
     function finalizeExpiredDispute(bytes32 intentId) external;
 
     // --- View functions ---
     function getDispute(bytes32 intentId) external view returns (DataTypes.Dispute memory);
+    function getDisputeOrder(bytes32 intentId) external view returns (DataTypes.Order memory);
     function calculateDisputeBond(uint256 fillAmount) external view returns (uint256);
     function calculateSlashAmount(uint256 fillAmount, uint256 makerTotalStake) external view returns (uint256);
     function disputeResolutionWindow() external view returns (uint256);
-    function getDisputeAttestors(bytes32 intentId, bool validSide) external view returns (address[] memory);
-    function getAttestorStakeWeight(bytes32 intentId, address attestor) external view returns (uint256);
-    function getQuorumFailCount(bytes32 intentId) external view returns (uint256);
 }
