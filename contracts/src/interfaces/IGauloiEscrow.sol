@@ -33,6 +33,9 @@ interface IGauloiEscrow {
     event TokenAdded(address indexed token);
     event TokenRemoved(address indexed token);
     event BatchSettleFailed(bytes32 indexed intentId);
+    event TreasuryUpdated(address oldTreasury, address newTreasury);
+    event ProtocolFeeUpdated(uint256 oldFeeBps, uint256 newFeeBps);
+    event ProtocolFeeCollected(bytes32 indexed intentId, address indexed token, uint256 amount);
 
     // Maker executes a taker's signed order (pulls tokens from taker, commits)
     function executeOrder(

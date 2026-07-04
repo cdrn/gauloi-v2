@@ -8,6 +8,7 @@ import {DataTypes} from "../../src/types/DataTypes.sol";
 import {IntentLib} from "../../src/libraries/IntentLib.sol";
 import {MockFeeOnTransferToken} from "../helpers/MockFeeOnTransferToken.sol";
 import {MockBlacklistableERC20} from "../helpers/MockBlacklistableERC20.sol";
+import {MockNoReturnToken} from "../helpers/MockNoReturnToken.sol";
 import {GauloiStaking} from "../../src/GauloiStaking.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
@@ -220,9 +221,162 @@ contract GauloiEscrowTest is BaseTest {
         (, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
         order.inputAmount = 20_000e6; // tamper
 
+        // Tampered order → different intentId → empty commitment. The default
+        // state enum (0) is Committed, so the maker check is what rejects it.
         vm.prank(maker1);
-        vm.expectRevert("GauloiEscrow: not committed");
+        vm.expectRevert("GauloiEscrow: not committed maker");
         escrow.submitFill(order, keccak256("hash"));
+    }
+
+    // --- Protocol fee ---
+
+    function test_setProtocolFee_requiresTreasury() public {
+        vm.startPrank(owner);
+        vm.expectRevert("GauloiEscrow: treasury not set");
+        escrow.setProtocolFee(10);
+
+        escrow.setTreasury(makeAddr("feeTreasury"));
+        escrow.setProtocolFee(10);
+        assertEq(escrow.protocolFeeBps(), 10);
+
+        vm.expectRevert("GauloiEscrow: fee exceeds cap");
+        escrow.setProtocolFee(101);
+        vm.stopPrank();
+
+        vm.prank(maker1);
+        vm.expectRevert();
+        escrow.setProtocolFee(10);
+    }
+
+    function test_settle_takesProtocolFee() public {
+        address feeTreasury = makeAddr("feeTreasury");
+        vm.startPrank(owner);
+        escrow.setTreasury(feeTreasury);
+        escrow.setProtocolFee(10); // 10 bps
+        vm.stopPrank();
+
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+        vm.prank(maker1);
+        escrow.submitFill(order, keccak256("hash"));
+        vm.warp(block.timestamp + SETTLEMENT_WINDOW);
+
+        uint256 fee = (10_000e6 * 10) / 10_000; // 10 USDC
+        uint256 makerBefore = usdc.balanceOf(maker1);
+
+        vm.expectEmit(true, true, false, true);
+        emit IGauloiEscrow.IntentSettled(intentId, maker1, 10_000e6 - fee);
+        vm.expectEmit(true, true, false, true);
+        emit IGauloiEscrow.ProtocolFeeCollected(intentId, address(usdc), fee);
+        escrow.settle(order);
+
+        assertEq(usdc.balanceOf(maker1) - makerBefore, 10_000e6 - fee);
+        assertEq(usdc.balanceOf(feeTreasury), fee);
+    }
+
+    function test_reclaimExpired_neverFeed() public {
+        vm.startPrank(owner);
+        escrow.setTreasury(makeAddr("feeTreasury"));
+        escrow.setProtocolFee(100); // max fee
+        vm.stopPrank();
+
+        (, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+        vm.warp(block.timestamp + COMMITMENT_TIMEOUT + 1);
+
+        uint256 takerBefore = usdc.balanceOf(taker);
+        vm.prank(taker);
+        escrow.reclaimExpired(order);
+
+        // Full refund — the fee only applies to maker settlement proceeds
+        assertEq(usdc.balanceOf(taker) - takerBefore, 10_000e6);
+    }
+
+    function test_settle_zeroFee_unchanged() public {
+        // Default state: no treasury, no fee — full amount to maker
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+        vm.prank(maker1);
+        escrow.submitFill(order, keccak256("hash"));
+        vm.warp(block.timestamp + SETTLEMENT_WINDOW);
+
+        uint256 makerBefore = usdc.balanceOf(maker1);
+        vm.expectEmit(true, true, false, true);
+        emit IGauloiEscrow.IntentSettled(intentId, maker1, 10_000e6);
+        escrow.settle(order);
+        assertEq(usdc.balanceOf(maker1) - makerBefore, 10_000e6);
+    }
+
+    // --- No-return-data tokens (USDT) ---
+
+    function test_settle_noReturnDataToken_reportsSuccess() public {
+        // Regression: try/catch IERC20.transfer decode-failed on USDT-style
+        // tokens and emitted SettlementTransferFailed for successful transfers
+        MockNoReturnToken usdtLike = new MockNoReturnToken("Tether USD", "USDT", 6);
+        vm.prank(owner);
+        escrow.addSupportedToken(address(usdtLike));
+
+        usdtLike.mint(taker, 100_000e6);
+        vm.prank(taker);
+        usdtLike.approve(address(escrow), type(uint256).max);
+
+        DataTypes.Order memory order = DataTypes.Order({
+            taker: taker,
+            inputToken: address(usdtLike),
+            inputAmount: 10_000e6,
+            outputToken: address(usdc),
+            minOutputAmount: 9_990e6,
+            destinationChainId: DEST_CHAIN_ID,
+            destinationAddress: DEST_ADDRESS,
+            expiry: block.timestamp + 1 hours,
+            nonce: 424242
+        });
+        bytes memory sig = _signOrder(takerKey, order);
+
+        vm.prank(maker1);
+        bytes32 intentId = escrow.executeOrder(order, sig);
+        vm.prank(maker1);
+        escrow.submitFill(order, keccak256("hash"));
+        vm.warp(block.timestamp + SETTLEMENT_WINDOW);
+
+        // Must emit IntentSettled (not SettlementTransferFailed) and move funds
+        vm.expectEmit(true, true, false, true);
+        emit IGauloiEscrow.IntentSettled(intentId, maker1, 10_000e6);
+        escrow.settle(order);
+
+        assertEq(usdtLike.balanceOf(maker1), 10_000e6);
+        assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Settled);
+    }
+
+    function test_reclaimExpired_noReturnDataToken_reportsSuccess() public {
+        MockNoReturnToken usdtLike = new MockNoReturnToken("Tether USD", "USDT", 6);
+        vm.prank(owner);
+        escrow.addSupportedToken(address(usdtLike));
+
+        usdtLike.mint(taker, 100_000e6);
+        vm.prank(taker);
+        usdtLike.approve(address(escrow), type(uint256).max);
+
+        DataTypes.Order memory order = DataTypes.Order({
+            taker: taker,
+            inputToken: address(usdtLike),
+            inputAmount: 10_000e6,
+            outputToken: address(usdc),
+            minOutputAmount: 9_990e6,
+            destinationChainId: DEST_CHAIN_ID,
+            destinationAddress: DEST_ADDRESS,
+            expiry: block.timestamp + 1 hours,
+            nonce: 424243
+        });
+        bytes memory sig = _signOrder(takerKey, order);
+
+        vm.prank(maker1);
+        bytes32 intentId = escrow.executeOrder(order, sig);
+        vm.warp(block.timestamp + COMMITMENT_TIMEOUT + 1);
+
+        vm.expectEmit(true, true, false, false);
+        emit IGauloiEscrow.IntentReclaimed(intentId, taker);
+        vm.prank(taker);
+        escrow.reclaimExpired(order);
+
+        assertEq(usdtLike.balanceOf(taker), 100_000e6);
     }
 
     function test_submitFill_notCommittedMaker_reverts() public {

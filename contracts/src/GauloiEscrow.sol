@@ -11,9 +11,11 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {DataTypes} from "./types/DataTypes.sol";
 import {IntentLib} from "./libraries/IntentLib.sol";
 import {SignatureLib} from "./libraries/SignatureLib.sol";
+import {TransferLib} from "./libraries/TransferLib.sol";
 
 contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
+    using TransferLib for IERC20;
 
     IGauloiStaking public staking;
     address public disputes;
@@ -26,6 +28,13 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
     // corridor verifiability: provable corridors shrink toward destination
     // finality, council corridors stay wide.
     mapping(uint256 => uint256) public corridorSettlementWindow;
+
+    // Protocol fee, taken from the maker's settlement proceeds (never from
+    // taker refunds). Hard-capped; ships at 0 so the switch is audited in
+    // before it is ever non-zero.
+    uint256 public constant MAX_PROTOCOL_FEE_BPS = 100; // 1%
+    uint256 public protocolFeeBps;
+    address public treasury;
 
     bytes32 public immutable domainSeparator;
 
@@ -91,6 +100,21 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
         uint256 oldValue = commitmentTimeoutDuration;
         commitmentTimeoutDuration = newTimeout;
         emit CommitmentTimeoutUpdated(oldValue, newTimeout);
+    }
+
+    function setTreasury(address _treasury) external onlyOwner {
+        require(_treasury != address(0), "GauloiEscrow: zero address");
+        address oldTreasury = treasury;
+        treasury = _treasury;
+        emit TreasuryUpdated(oldTreasury, _treasury);
+    }
+
+    function setProtocolFee(uint256 newFeeBps) external onlyOwner {
+        require(newFeeBps <= MAX_PROTOCOL_FEE_BPS, "GauloiEscrow: fee exceeds cap");
+        require(newFeeBps == 0 || treasury != address(0), "GauloiEscrow: treasury not set");
+        uint256 oldValue = protocolFeeBps;
+        protocolFeeBps = newFeeBps;
+        emit ProtocolFeeUpdated(oldValue, newFeeBps);
     }
 
     function addSupportedToken(address token) external onlyOwner {
@@ -226,16 +250,39 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
         // Release exposure
         staking.decreaseExposure(commitment.maker, order.inputAmount);
 
-        // Transfer escrowed tokens to maker — use try/catch so a blacklisted
-        // maker cannot DoS settlement (funds recoverable via rescueTokens)
-        try IERC20(order.inputToken).transfer(commitment.maker, order.inputAmount) returns (bool success) {
-            if (success) {
-                emit IntentSettled(intentId, commitment.maker, order.inputAmount);
+        _payoutMaker(intentId, commitment.maker, order.inputToken, order.inputAmount);
+    }
+
+    /// @dev Maker settlement payout with protocol fee. tryTransfer so a
+    ///      blacklisted maker cannot DoS settlement (funds recoverable via
+    ///      rescueTokens) — and, unlike try/catch on IERC20.transfer, it
+    ///      reports success correctly for no-return-data tokens (USDT).
+    function _payoutMaker(bytes32 intentId, address maker, address token, uint256 amount) internal {
+        uint256 fee = (amount * protocolFeeBps) / 10_000;
+        uint256 makerAmount = amount - fee;
+
+        if (IERC20(token).tryTransfer(maker, makerAmount)) {
+            emit IntentSettled(intentId, maker, makerAmount);
+        } else {
+            emit SettlementTransferFailed(intentId, maker, makerAmount);
+        }
+
+        if (fee > 0) {
+            if (IERC20(token).tryTransfer(treasury, fee)) {
+                emit ProtocolFeeCollected(intentId, token, fee);
             } else {
-                emit SettlementTransferFailed(intentId, commitment.maker, order.inputAmount);
+                emit SettlementTransferFailed(intentId, treasury, fee);
             }
-        } catch {
-            emit SettlementTransferFailed(intentId, commitment.maker, order.inputAmount);
+        }
+    }
+
+    /// @dev Taker refund — never fee'd. tryTransfer so a blacklisted taker
+    ///      cannot block exposure release (funds recoverable via rescueTokens)
+    function _refundTaker(bytes32 intentId, address taker, address token, uint256 amount) internal {
+        if (IERC20(token).tryTransfer(taker, amount)) {
+            emit IntentReclaimed(intentId, taker);
+        } else {
+            emit SettlementTransferFailed(intentId, taker, amount);
         }
     }
 
@@ -254,17 +301,7 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
 
         commitment.state = DataTypes.IntentState.Expired;
 
-        // Return tokens to taker — use try/catch so a blacklisted taker
-        // cannot block exposure release (funds recoverable via rescueTokens)
-        try IERC20(order.inputToken).transfer(commitment.taker, order.inputAmount) returns (bool success) {
-            if (success) {
-                emit IntentReclaimed(intentId, commitment.taker);
-            } else {
-                emit SettlementTransferFailed(intentId, commitment.taker, order.inputAmount);
-            }
-        } catch {
-            emit SettlementTransferFailed(intentId, commitment.taker, order.inputAmount);
-        }
+        _refundTaker(intentId, commitment.taker, order.inputToken, order.inputAmount);
     }
 
     // --- Disputes integration ---
@@ -285,16 +322,7 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
         commitment.state = DataTypes.IntentState.Settled;
         staking.decreaseExposure(commitment.maker, order.inputAmount);
 
-        // Use try/catch to prevent a blacklisted maker from blocking dispute resolution
-        try IERC20(order.inputToken).transfer(commitment.maker, order.inputAmount) returns (bool success) {
-            if (success) {
-                emit IntentSettled(intentId, commitment.maker, order.inputAmount);
-            } else {
-                emit SettlementTransferFailed(intentId, commitment.maker, order.inputAmount);
-            }
-        } catch {
-            emit SettlementTransferFailed(intentId, commitment.maker, order.inputAmount);
-        }
+        _payoutMaker(intentId, commitment.maker, order.inputToken, order.inputAmount);
     }
 
     /// @dev Called by Disputes contract after resolution — fill was invalid, refund taker
@@ -305,16 +333,7 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
 
         commitment.state = DataTypes.IntentState.Expired;
 
-        // Use try/catch to prevent a blacklisted taker from blocking dispute resolution
-        try IERC20(order.inputToken).transfer(commitment.taker, order.inputAmount) returns (bool success) {
-            if (success) {
-                emit IntentReclaimed(intentId, commitment.taker);
-            } else {
-                emit SettlementTransferFailed(intentId, commitment.taker, order.inputAmount);
-            }
-        } catch {
-            emit SettlementTransferFailed(intentId, commitment.taker, order.inputAmount);
-        }
+        _refundTaker(intentId, commitment.taker, order.inputToken, order.inputAmount);
     }
 
     // --- View functions ---
