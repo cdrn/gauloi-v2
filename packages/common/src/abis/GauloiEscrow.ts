@@ -27,6 +27,19 @@ export const GauloiEscrowAbi = [
   },
   {
     "type": "function",
+    "name": "MAX_PROTOCOL_FEE_BPS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "addSupportedToken",
     "inputs": [
       {
@@ -55,6 +68,25 @@ export const GauloiEscrowAbi = [
     "type": "function",
     "name": "commitmentTimeoutDuration",
     "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "corridorSettlementWindow",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
     "outputs": [
       {
         "name": "",
@@ -241,6 +273,19 @@ export const GauloiEscrowAbi = [
         "name": "",
         "type": "bool",
         "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "protocolFeeBps",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -493,6 +538,24 @@ export const GauloiEscrowAbi = [
   },
   {
     "type": "function",
+    "name": "setCorridorSettlementWindow",
+    "inputs": [
+      {
+        "name": "destinationChainId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "newWindow",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setDisputed",
     "inputs": [
       {
@@ -519,12 +582,38 @@ export const GauloiEscrowAbi = [
   },
   {
     "type": "function",
+    "name": "setProtocolFee",
+    "inputs": [
+      {
+        "name": "newFeeBps",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setSettlementWindow",
     "inputs": [
       {
         "name": "newWindow",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setTreasury",
+    "inputs": [
+      {
+        "name": "_treasury",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -738,6 +827,25 @@ export const GauloiEscrowAbi = [
   },
   {
     "type": "function",
+    "name": "settlementWindowFor",
+    "inputs": [
+      {
+        "name": "destinationChainId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "staking",
     "inputs": [],
     "outputs": [
@@ -754,9 +862,56 @@ export const GauloiEscrowAbi = [
     "name": "submitFill",
     "inputs": [
       {
-        "name": "intentId",
-        "type": "bytes32",
-        "internalType": "bytes32"
+        "name": "order",
+        "type": "tuple",
+        "internalType": "struct DataTypes.Order",
+        "components": [
+          {
+            "name": "taker",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "outputToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "minOutputAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationChainId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "destinationAddress",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "expiry",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
       },
       {
         "name": "destinationTxHash",
@@ -801,6 +956,19 @@ export const GauloiEscrowAbi = [
   },
   {
     "type": "function",
+    "name": "treasury",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "unpause",
     "inputs": [],
     "outputs": [],
@@ -823,6 +991,31 @@ export const GauloiEscrowAbi = [
     "type": "event",
     "name": "CommitmentTimeoutUpdated",
     "inputs": [
+      {
+        "name": "oldValue",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "newValue",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "CorridorSettlementWindowUpdated",
+    "inputs": [
+      {
+        "name": "destinationChainId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
       {
         "name": "oldValue",
         "type": "uint256",
@@ -1021,6 +1214,50 @@ export const GauloiEscrowAbi = [
   },
   {
     "type": "event",
+    "name": "ProtocolFeeCollected",
+    "inputs": [
+      {
+        "name": "intentId",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProtocolFeeUpdated",
+    "inputs": [
+      {
+        "name": "oldFeeBps",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "newFeeBps",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "SettlementTransferFailed",
     "inputs": [
       {
@@ -1084,6 +1321,25 @@ export const GauloiEscrowAbi = [
         "name": "token",
         "type": "address",
         "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "TreasuryUpdated",
+    "inputs": [
+      {
+        "name": "oldTreasury",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "newTreasury",
+        "type": "address",
+        "indexed": false,
         "internalType": "address"
       }
     ],
