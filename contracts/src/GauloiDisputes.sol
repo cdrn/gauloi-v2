@@ -145,6 +145,15 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         require(block.timestamp < commitment.disputeWindowEnd, "GauloiDisputes: window closed");
         require(msg.sender != commitment.maker, "GauloiDisputes: cannot challenge own fill");
 
+        // A dispute must be adjudicable. Without a resolver the only exit is the
+        // deadline default, which would let a griefer force-slash an honest,
+        // registry-recorded fill on an unconfigured corridor. Require the
+        // corridor's arbiter to exist before the challenge can open.
+        require(
+            address(resolvers[order.destinationChainId]) != address(0),
+            "GauloiDisputes: no resolver for corridor"
+        );
+
         uint256 bondAmount = calculateDisputeBond(order.inputAmount);
 
         // Transfer bond from challenger
@@ -203,15 +212,24 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         require(block.timestamp > disp.disputeDeadline, "GauloiDisputes: deadline not passed");
 
         DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
+        DataTypes.Order storage order = _disputeOrders[intentId];
 
-        // The maker failed to defend a challenged fill: resolves against the fill.
-        // Safe because registry-recorded fills give every honest maker a defense —
-        // this default punishes silent fraud, not honest fills.
+        // If the corridor lost its resolver after the challenge opened, the maker
+        // can no longer defend — voiding in the maker's favor is the griefing-safe
+        // direction (owner removing an arbiter must not auto-convict). Otherwise
+        // the maker failed to defend a defendable fill: silence convicts.
+        bool defendable = address(resolvers[order.destinationChainId]) != address(0);
+
         disp.resolved = true;
-        disp.fillDeemedValid = false;
-        _resolveAsInvalid(intentId, commitment, disp);
+        disp.fillDeemedValid = defendable ? false : true;
 
-        emit DisputeResolved(intentId, false);
+        if (defendable) {
+            _resolveAsInvalid(intentId, commitment, disp);
+        } else {
+            _resolveAsValid(intentId, commitment, disp);
+        }
+
+        emit DisputeResolved(intentId, !defendable);
     }
 
     // --- Internal resolution ---

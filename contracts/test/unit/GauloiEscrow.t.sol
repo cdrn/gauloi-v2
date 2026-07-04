@@ -603,14 +603,24 @@ contract GauloiEscrowTest is BaseTest {
 
     // --- Pause ---
 
-    function test_pause_onlyDisputes() public {
+    function test_pause_ownerOrDisputes() public {
+        // A random account cannot pause
         vm.prank(maker1);
-        vm.expectRevert("GauloiEscrow: caller is not disputes");
+        vm.expectRevert("GauloiEscrow: caller is not owner or disputes");
         escrow.pause();
 
+        // Owner can pause (emergency stop — disputes no longer auto-pauses in v2)
         vm.prank(owner);
-        vm.expectRevert("GauloiEscrow: caller is not disputes");
         escrow.pause();
+        assertTrue(escrow.paused());
+
+        vm.prank(owner);
+        escrow.unpause();
+
+        // Disputes contract can also pause
+        vm.prank(mockDisputes);
+        escrow.pause();
+        assertTrue(escrow.paused());
     }
 
     function test_unpause_onlyOwner() public {
@@ -953,6 +963,56 @@ contract GauloiEscrowTest is BaseTest {
         assertEq(bToken.balanceOf(taker), takerBalBefore);
         // Funds still in escrow (recoverable via rescueTokens)
         assertEq(bToken.balanceOf(address(bEscrow)), 10_000e6);
+    }
+
+    // --- rescueTokens surplus accounting ---
+
+    function test_rescueTokens_cannotTouchLiveEscrow() public {
+        // A live commitment is escrow liability, not rescuable surplus
+        _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+        assertEq(escrow.escrowedBalance(address(usdc)), 10_000e6);
+
+        vm.prank(owner);
+        vm.expectRevert("GauloiEscrow: exceeds rescuable surplus");
+        escrow.rescueTokens(address(usdc), owner, 1);
+
+        // Tokens sent in by mistake ARE rescuable, up to the surplus
+        usdc.mint(address(escrow), 500e6);
+        vm.startPrank(owner);
+        vm.expectRevert("GauloiEscrow: exceeds rescuable surplus");
+        escrow.rescueTokens(address(usdc), owner, 501e6);
+        escrow.rescueTokens(address(usdc), owner, 500e6);
+        vm.stopPrank();
+        assertEq(usdc.balanceOf(owner), 500e6);
+    }
+
+    function test_rescueTokens_recoversStrandedAfterFailedTransfer() public {
+        (MockBlacklistableERC20 bToken,, GauloiEscrow bEscrow) = _deployBlacklistEscrow();
+
+        DataTypes.Order memory order = DataTypes.Order({
+            taker: taker, inputToken: address(bToken), inputAmount: 10_000e6,
+            outputToken: address(bToken), minOutputAmount: 9_990e6,
+            destinationChainId: DEST_CHAIN_ID, destinationAddress: DEST_ADDRESS,
+            expiry: block.timestamp + 1 hours, nonce: 0
+        });
+        bytes memory sig = _signOrderForEscrow(bEscrow, takerKey, order);
+
+        vm.prank(maker1);
+        bytes32 intentId = bEscrow.executeOrder(order, sig);
+        vm.prank(maker1);
+        bEscrow.submitFill(order, keccak256("hash"));
+        vm.warp(block.timestamp + SETTLEMENT_WINDOW);
+
+        // Blacklisted maker → transfer fails, but liability is discharged so the
+        // stranded funds become rescuable surplus
+        bToken.blacklist(maker1);
+        bEscrow.settle(order);
+        assertEq(bEscrow.escrowedBalance(address(bToken)), 0);
+
+        vm.prank(owner);
+        bEscrow.rescueTokens(address(bToken), owner, 10_000e6);
+        assertEq(bToken.balanceOf(owner), 10_000e6);
+        assertEq(intentId, IntentLib.computeIntentId(order));
     }
 
     // --- Happy path end-to-end ---

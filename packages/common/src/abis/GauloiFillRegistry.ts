@@ -74,6 +74,11 @@ export const GauloiFillRegistryAbi = [
         "name": "intentId",
         "type": "bytes32",
         "internalType": "bytes32"
+      },
+      {
+        "name": "filler",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [
@@ -93,6 +98,11 @@ export const GauloiFillRegistryAbi = [
         "name": "intentId",
         "type": "bytes32",
         "internalType": "bytes32"
+      },
+      {
+        "name": "filler",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [

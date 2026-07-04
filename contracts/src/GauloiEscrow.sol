@@ -44,6 +44,10 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
     // Commitment storage (intentId → Commitment)
     mapping(bytes32 => DataTypes.Commitment) internal _commitments;
 
+    // Live escrowed liability per token — the sum currently owed to takers/makers
+    // across open commitments. rescueTokens can only touch balance above this.
+    mapping(address => uint256) public escrowedBalance;
+
     bool public paused;
 
     modifier whenNotPaused() {
@@ -53,6 +57,14 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
 
     modifier onlyDisputes() {
         require(msg.sender == disputes, "GauloiEscrow: caller is not disputes");
+        _;
+    }
+
+    modifier onlyOwnerOrDisputes() {
+        require(
+            msg.sender == owner() || msg.sender == disputes,
+            "GauloiEscrow: caller is not owner or disputes"
+        );
         _;
     }
 
@@ -128,15 +140,21 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
         emit TokenRemoved(token);
     }
 
-    /// @dev Recover tokens stuck from failed dispute-resolution transfers
+    /// @dev Recover only the surplus above live escrow liability — tokens stranded
+    ///      by failed transfers or sent in by mistake. Cannot touch funds backing
+    ///      open commitments, so the owner can never rug escrowed taker/maker funds.
     function rescueTokens(address token, address to, uint256 amount) external onlyOwner nonReentrant {
         require(to != address(0), "GauloiEscrow: zero address");
+        uint256 liability = escrowedBalance[token];
+        uint256 bal = IERC20(token).balanceOf(address(this));
+        uint256 surplus = bal > liability ? bal - liability : 0;
+        require(amount <= surplus, "GauloiEscrow: exceeds rescuable surplus");
         IERC20(token).safeTransfer(to, amount);
     }
 
     // --- Pause ---
 
-    function pause() external onlyDisputes {
+    function pause() external onlyOwnerOrDisputes {
         paused = true;
         emit Paused(msg.sender);
     }
@@ -199,6 +217,9 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
             IERC20(order.inputToken).balanceOf(address(this)) - balBefore == order.inputAmount,
             "GauloiEscrow: fee-on-transfer token"
         );
+
+        // Record the new escrow liability (checked exact above)
+        escrowedBalance[order.inputToken] += order.inputAmount;
     }
 
     /// @dev Takes the full order so the dispute window can be priced per corridor.
@@ -258,6 +279,10 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
     ///      rescueTokens) — and, unlike try/catch on IERC20.transfer, it
     ///      reports success correctly for no-return-data tokens (USDT).
     function _payoutMaker(bytes32 intentId, address maker, address token, uint256 amount) internal {
+        // Liability discharged whether or not the transfer succeeds — a failed
+        // transfer leaves the funds as recoverable surplus, not live escrow.
+        escrowedBalance[token] -= amount;
+
         uint256 fee = (amount * protocolFeeBps) / 10_000;
         uint256 makerAmount = amount - fee;
 
@@ -279,6 +304,8 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
     /// @dev Taker refund — never fee'd. tryTransfer so a blacklisted taker
     ///      cannot block exposure release (funds recoverable via rescueTokens)
     function _refundTaker(bytes32 intentId, address taker, address token, uint256 amount) internal {
+        escrowedBalance[token] -= amount;
+
         if (IERC20(token).tryTransfer(taker, amount)) {
             emit IntentReclaimed(intentId, taker);
         } else {

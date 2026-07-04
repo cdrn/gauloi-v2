@@ -52,8 +52,8 @@ contract GauloiFillRegistryTest is Test {
         bytes32 expected = registry.computeFillCommitment(
             address(usdc), recipient, FILL_AMOUNT, maker, block.number
         );
-        assertEq(registry.getFill(INTENT_ID), expected);
-        assertTrue(registry.isFilled(INTENT_ID));
+        assertEq(registry.getFill(INTENT_ID, maker), expected);
+        assertTrue(registry.isFilled(INTENT_ID, maker));
     }
 
     function test_Fill_EmitsEvent() public {
@@ -64,23 +64,37 @@ contract GauloiFillRegistryTest is Test {
         registry.fill(INTENT_ID, address(usdc), recipient, FILL_AMOUNT);
     }
 
-    function test_Fill_RevertsOnDoubleFill() public {
+    function test_Fill_RevertsOnDoubleFill_sameFiller() public {
         vm.prank(maker);
         registry.fill(INTENT_ID, address(usdc), recipient, FILL_AMOUNT);
 
-        // Same intent, same filler
+        // Same intent, same filler — one fill per (intent, filler)
         vm.prank(maker);
         vm.expectRevert("GauloiFillRegistry: already filled");
         registry.fill(INTENT_ID, address(usdc), recipient, FILL_AMOUNT);
+    }
 
-        // Same intent, different filler and params — still one fill per intent
-        address other = makeAddr("other");
-        usdc.mint(other, FILL_AMOUNT);
-        vm.startPrank(other);
+    function test_Fill_squatterCannotBlockRealMaker() public {
+        // A squatter records the same intentId first. Under (intentId, filler)
+        // keying this occupies only the squatter's slot — the real maker's slot
+        // is independent, so the maker can still record their genuine fill.
+        address squatter = makeAddr("squatter");
+        address squatterDest = makeAddr("squatterDest");
+        usdc.mint(squatter, FILL_AMOUNT);
+        vm.startPrank(squatter);
         usdc.approve(address(registry), FILL_AMOUNT);
-        vm.expectRevert("GauloiFillRegistry: already filled");
-        registry.fill(INTENT_ID, address(usdc), other, FILL_AMOUNT);
+        registry.fill(INTENT_ID, address(usdc), squatterDest, 1); // dust to poison the intent
         vm.stopPrank();
+
+        // Real maker's fill still lands, and resolves against the maker's slot
+        vm.prank(maker);
+        registry.fill(INTENT_ID, address(usdc), recipient, FILL_AMOUNT);
+
+        assertTrue(registry.isFilled(INTENT_ID, maker));
+        assertEq(usdc.balanceOf(recipient), FILL_AMOUNT);
+        // The squatter's slot is a separate, ignored record
+        assertTrue(registry.isFilled(INTENT_ID, squatter));
+        assertFalse(registry.getFill(INTENT_ID, maker) == registry.getFill(INTENT_ID, squatter));
     }
 
     function test_Fill_DistinctIntentsSameParams() public {
@@ -92,8 +106,8 @@ contract GauloiFillRegistryTest is Test {
         vm.stopPrank();
 
         assertEq(usdc.balanceOf(recipient), 2 * FILL_AMOUNT);
-        assertTrue(registry.isFilled(keccak256("intent-a")));
-        assertTrue(registry.isFilled(keccak256("intent-b")));
+        assertTrue(registry.isFilled(keccak256("intent-a"), maker));
+        assertTrue(registry.isFilled(keccak256("intent-b"), maker));
     }
 
     function test_Fill_RevertsOnFeeOnTransferToken() public {
@@ -101,7 +115,7 @@ contract GauloiFillRegistryTest is Test {
         vm.expectRevert("GauloiFillRegistry: fee-on-transfer token");
         registry.fill(INTENT_ID, address(feeToken), recipient, FILL_AMOUNT);
 
-        assertFalse(registry.isFilled(INTENT_ID));
+        assertFalse(registry.isFilled(INTENT_ID, maker));
     }
 
     function test_Fill_RevertsWithoutApproval() public {
@@ -134,8 +148,8 @@ contract GauloiFillRegistryTest is Test {
     // --- views ---
 
     function test_GetFill_UnfilledIsZero() public view {
-        assertEq(registry.getFill(INTENT_ID), bytes32(0));
-        assertFalse(registry.isFilled(INTENT_ID));
+        assertEq(registry.getFill(INTENT_ID, maker), bytes32(0));
+        assertFalse(registry.isFilled(INTENT_ID, maker));
     }
 
     function test_ComputeFillCommitment_MatchesPreimage() public {
@@ -145,7 +159,7 @@ contract GauloiFillRegistryTest is Test {
 
         // A verifier holding the preimage recomputes the slot value:
         // wrong amount, filler, or block must not match
-        bytes32 stored = registry.getFill(INTENT_ID);
+        bytes32 stored = registry.getFill(INTENT_ID, maker);
         assertEq(stored, keccak256(abi.encode(address(usdc), recipient, FILL_AMOUNT, maker, uint256(12_345))));
         assertTrue(stored != registry.computeFillCommitment(address(usdc), recipient, FILL_AMOUNT - 1, maker, 12_345));
         assertTrue(stored != registry.computeFillCommitment(address(usdc), recipient, FILL_AMOUNT, recipient, 12_345));
@@ -161,7 +175,7 @@ contract GauloiFillRegistryTest is Test {
         registry.fill(intentId, address(usdc), recipient, amount);
 
         assertEq(
-            registry.getFill(intentId),
+            registry.getFill(intentId, maker),
             registry.computeFillCommitment(address(usdc), recipient, amount, maker, block.number)
         );
     }
