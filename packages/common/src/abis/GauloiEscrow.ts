@@ -124,6 +124,25 @@ export const GauloiEscrowAbi = [
   },
   {
     "type": "function",
+    "name": "escrowedBalance",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "executeOrder",
     "inputs": [
       {

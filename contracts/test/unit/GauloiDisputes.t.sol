@@ -370,8 +370,9 @@ contract GauloiDisputesTest is BaseTest {
         disputes.resolve(intentId, "");
     }
 
-    function test_resolve_revertsIfNoResolverForCorridor() public {
-        // Order to a corridor with no resolver configured
+    function test_challenge_revertsIfNoResolverForCorridor() public {
+        // A fill to a corridor with no resolver cannot be challenged at all —
+        // otherwise the deadline default would force-slash an undefendable maker
         DataTypes.Order memory order = DataTypes.Order({
             taker: taker,
             inputToken: address(usdc),
@@ -389,10 +390,29 @@ contract GauloiDisputesTest is BaseTest {
         vm.prank(maker1Addr);
         escrow.submitFill(order, keccak256("tx"));
 
+        vm.prank(challenger);
+        vm.expectRevert("GauloiDisputes: no resolver for corridor");
+        disputes.challenge(order);
+    }
+
+    function test_finalizeExpired_voidsWhenResolverRemoved() public {
+        // Owner removes the resolver after a challenge opens — the maker can no
+        // longer defend, so finalize must void in the maker's favor, not convict
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
         _challengeAs(challenger, order);
 
-        vm.expectRevert("GauloiDisputes: no resolver for corridor");
-        disputes.resolve(intentId, "");
+        vm.prank(owner);
+        disputes.setResolver(DEST_CHAIN_ID, address(0));
+
+        vm.warp(block.timestamp + RESOLUTION_WINDOW + 1);
+
+        uint256 makerStakeBefore = staking.getStake(maker1Addr);
+        disputes.finalizeExpiredDispute(intentId);
+
+        // Resolved valid: maker NOT slashed, intent settled
+        assertTrue(disputes.getDispute(intentId).fillDeemedValid);
+        assertEq(staking.getStake(maker1Addr), makerStakeBefore);
+        assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Settled);
     }
 
     function test_resolve_passesArgsToResolver() public {

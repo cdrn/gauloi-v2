@@ -21,7 +21,14 @@ import {IGauloiFillRegistry} from "./interfaces/IGauloiFillRegistry.sol";
 contract GauloiFillRegistry is IGauloiFillRegistry, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    // intentId => keccak256(abi.encode(token, recipient, amount, filler, block.number))
+    // keccak256(intentId, filler) => keccak256(abi.encode(token, recipient, amount, filler, block.number))
+    //
+    // Keyed by (intentId, filler), not intentId alone. A fill is a claim by a
+    // specific filler; the slot must belong to the filler who made it. Otherwise
+    // anyone could front-run the committed maker's destination fill with a dust
+    // transfer and permanently occupy the intent's only slot — a cheap DoS
+    // against makers. The resolver looks up the committed maker's slot
+    // specifically, so a squatter's slot is simply ignored.
     mapping(bytes32 => bytes32) internal _fills;
 
     function fill(
@@ -34,10 +41,12 @@ contract GauloiFillRegistry is IGauloiFillRegistry, ReentrancyGuard {
         require(token != address(0), "GauloiFillRegistry: zero token");
         require(recipient != address(0), "GauloiFillRegistry: zero recipient");
         require(amount > 0, "GauloiFillRegistry: zero amount");
-        require(_fills[intentId] == bytes32(0), "GauloiFillRegistry: already filled");
+
+        bytes32 slot = _slot(intentId, msg.sender);
+        require(_fills[slot] == bytes32(0), "GauloiFillRegistry: already filled");
 
         // Effects before interaction (CEI pattern)
-        _fills[intentId] = computeFillCommitment(token, recipient, amount, msg.sender, block.number);
+        _fills[slot] = computeFillCommitment(token, recipient, amount, msg.sender, block.number);
 
         emit Filled(intentId, token, recipient, amount, msg.sender);
 
@@ -53,12 +62,16 @@ contract GauloiFillRegistry is IGauloiFillRegistry, ReentrancyGuard {
 
     // --- View functions ---
 
-    function getFill(bytes32 intentId) external view returns (bytes32) {
-        return _fills[intentId];
+    function getFill(bytes32 intentId, address filler) external view returns (bytes32) {
+        return _fills[_slot(intentId, filler)];
     }
 
-    function isFilled(bytes32 intentId) external view returns (bool) {
-        return _fills[intentId] != bytes32(0);
+    function isFilled(bytes32 intentId, address filler) external view returns (bool) {
+        return _fills[_slot(intentId, filler)] != bytes32(0);
+    }
+
+    function _slot(bytes32 intentId, address filler) internal pure returns (bytes32) {
+        return keccak256(abi.encode(intentId, filler));
     }
 
     function computeFillCommitment(

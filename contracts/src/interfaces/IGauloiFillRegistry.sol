@@ -17,10 +17,11 @@ interface IGauloiFillRegistry {
 
     // --- View functions ---
 
-    // Commitment hash for a recorded fill (bytes32(0) if unfilled)
-    function getFill(bytes32 intentId) external view returns (bytes32);
+    // Commitment hash for a fill recorded by `filler` (bytes32(0) if none).
+    // Keyed by (intentId, filler): resolvers look up the committed maker's slot.
+    function getFill(bytes32 intentId, address filler) external view returns (bytes32);
 
-    function isFilled(bytes32 intentId) external view returns (bool);
+    function isFilled(bytes32 intentId, address filler) external view returns (bool);
 
     // Recompute a fill commitment from its preimage — used by verifiers
     // checking a proven storage slot against claimed fill parameters
