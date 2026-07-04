@@ -22,7 +22,9 @@ import {CouncilResolver} from "../src/resolvers/CouncilResolver.sol";
 ///           COMMITMENT_TIMEOUT, RESOLUTION_WINDOW, BOND_BPS, MIN_BOND (optional)
 contract Deploy is Script {
     function run() external {
-        uint256 deployerKey = vm.envUint("DEPLOYER_KEY");
+        // Project convention: PRIVATE_KEY (DEPLOYER_KEY accepted as fallback)
+        uint256 deployerKey = vm.envOr("PRIVATE_KEY", uint256(0));
+        if (deployerKey == 0) deployerKey = vm.envUint("DEPLOYER_KEY");
         address deployer = vm.addr(deployerKey);
         address treasury = vm.envOr("TREASURY", deployer);
 
