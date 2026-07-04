@@ -3,14 +3,15 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {MockERC20} from "../helpers/MockERC20.sol";
+import {MockResolver} from "../helpers/MockResolver.sol";
 import {GauloiStaking} from "../../src/GauloiStaking.sol";
 import {GauloiEscrow} from "../../src/GauloiEscrow.sol";
 import {GauloiDisputes} from "../../src/GauloiDisputes.sol";
 import {IGauloiEscrow} from "../../src/interfaces/IGauloiEscrow.sol";
 import {IGauloiDisputes} from "../../src/interfaces/IGauloiDisputes.sol";
+import {IResolver} from "../../src/interfaces/IResolver.sol";
 import {DataTypes} from "../../src/types/DataTypes.sol";
 import {IntentLib} from "../../src/libraries/IntentLib.sol";
-import {SignatureLib} from "../../src/libraries/SignatureLib.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /// @notice Full integration test: all three contracts deployed and wired together.
@@ -20,8 +21,10 @@ contract SettlementLoopTest is Test {
     GauloiStaking public staking;
     GauloiEscrow public escrow;
     GauloiDisputes public disputes;
+    MockResolver public resolver;
 
     address public owner = makeAddr("owner");
+    address public treasury = makeAddr("treasury");
 
     // Taker with private key for signing
     uint256 public takerKey = 0x7A4E5;
@@ -62,8 +65,9 @@ contract SettlementLoopTest is Test {
         escrow = new GauloiEscrow(address(staking), SETTLEMENT_WINDOW, COMMITMENT_TIMEOUT, owner);
         disputes = new GauloiDisputes(
             address(staking), address(escrow), address(usdc),
-            RESOLUTION_WINDOW, BOND_BPS, MIN_BOND, owner
+            RESOLUTION_WINDOW, BOND_BPS, MIN_BOND, treasury, owner
         );
+        resolver = new MockResolver();
 
         // Wire contracts
         vm.startPrank(owner);
@@ -72,6 +76,7 @@ contract SettlementLoopTest is Test {
         escrow.setDisputes(address(disputes));
         escrow.addSupportedToken(address(usdc));
         escrow.addSupportedToken(address(usdt));
+        disputes.setResolver(DEST_CHAIN, address(resolver));
         vm.stopPrank();
 
         // Fund participants
@@ -136,20 +141,6 @@ contract SettlementLoopTest is Test {
             escrow.domainSeparator(), structHash
         );
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(takerKey, digest);
-        return abi.encodePacked(r, s, v);
-    }
-
-    function _signAttestation(
-        uint256 key, bytes32 intentId, bool fillValid,
-        bytes32 fillTxHash, uint256 destChainId
-    ) internal view returns (bytes memory) {
-        bytes32 structHash = SignatureLib.hashAttestation(
-            intentId, fillValid, fillTxHash, destChainId
-        );
-        bytes32 digest = MessageHashUtils.toTypedDataHash(
-            disputes.domainSeparator(), structHash
-        );
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
         return abi.encodePacked(r, s, v);
     }
 
@@ -284,28 +275,27 @@ contract SettlementLoopTest is Test {
         vm.prank(makerA);
         escrow.submitFill(intentId, fillTx);
 
-        // MakerB disputes (incorrectly)
+        // MakerB challenges (incorrectly)
         uint256 bondAmount = disputes.calculateDisputeBond(20_000e6);
         uint256 makerBBalBefore = usdc.balanceOf(makerB);
 
         vm.startPrank(makerB);
         usdc.approve(address(disputes), bondAmount);
-        disputes.dispute(order);
+        disputes.challenge(order);
         vm.stopPrank();
 
         assertEq(usdc.balanceOf(makerB), makerBBalBefore - bondAmount);
 
-        // MakerC attests: fill is valid
-        bytes memory attestSig = _signAttestation(makerCKey, intentId, true, fillTx, DEST_CHAIN);
-        bytes[] memory sigs = new bytes[](1);
-        sigs[0] = attestSig;
+        // Corridor resolver rules the fill valid (maker defends successfully)
+        resolver.setVerdict(IResolver.Verdict.Valid);
 
         uint256 makerABalBefore = usdc.balanceOf(makerA);
 
-        disputes.resolveDispute(intentId, true, sigs);
+        disputes.resolve(intentId, "");
 
-        // MakerA gets escrowed funds + half the bond
+        // MakerA gets escrowed funds + half the bond; treasury gets the rest
         assertEq(usdc.balanceOf(makerA) - makerABalBefore, 20_000e6 + bondAmount / 2);
+        assertEq(usdc.balanceOf(treasury), bondAmount - bondAmount / 2);
 
         // Intent settled
         assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Settled);
@@ -328,22 +318,20 @@ contract SettlementLoopTest is Test {
         vm.prank(makerA);
         escrow.submitFill(intentId, fakeFillTx);
 
-        // MakerB disputes (correctly)
+        // MakerB challenges (correctly)
         uint256 bondAmount = disputes.calculateDisputeBond(20_000e6);
         vm.startPrank(makerB);
         usdc.approve(address(disputes), bondAmount);
-        disputes.dispute(order);
+        disputes.challenge(order);
         vm.stopPrank();
 
-        // MakerC attests: fill is invalid
-        bytes memory attestSig = _signAttestation(makerCKey, intentId, false, fakeFillTx, DEST_CHAIN);
-        bytes[] memory sigs = new bytes[](1);
-        sigs[0] = attestSig;
+        // Corridor resolver rules the fill invalid
+        resolver.setVerdict(IResolver.Verdict.Invalid);
 
         uint256 takerBalBefore = usdc.balanceOf(taker);
         uint256 makerBBalBefore = usdc.balanceOf(makerB);
 
-        disputes.resolveDispute(intentId, false, sigs);
+        disputes.resolve(intentId, "");
 
         // Taker gets escrowed funds back
         assertEq(usdc.balanceOf(taker) - takerBalBefore, 20_000e6);
@@ -365,10 +353,10 @@ contract SettlementLoopTest is Test {
     }
 
     // =========================================================================
-    // Dispute: expires without resolution (defaults to fill-valid)
+    // Dispute: expires without a verdict — maker failed to defend, fill invalid
     // =========================================================================
 
-    function test_dispute_expiresDefault_fillValid() public {
+    function test_dispute_expiresUndefended_fillInvalid() public {
         DataTypes.Order memory order = _makeOrder(address(usdc), 10_000e6, address(usdc), 9_990e6);
         bytes memory sig = _signOrder(order);
 
@@ -381,18 +369,23 @@ contract SettlementLoopTest is Test {
         uint256 bondAmount = disputes.calculateDisputeBond(10_000e6);
         vm.startPrank(makerB);
         usdc.approve(address(disputes), bondAmount);
-        disputes.dispute(order);
+        disputes.challenge(order);
         vm.stopPrank();
 
-        // Nobody resolves. Wait for deadline.
+        // No verdict lands. Wait for deadline.
         vm.warp(block.timestamp + RESOLUTION_WINDOW + 1);
 
-        uint256 makerABalBefore = usdc.balanceOf(makerA);
+        uint256 takerBalBefore = usdc.balanceOf(taker);
+        uint256 makerBBalBefore = usdc.balanceOf(makerB);
         disputes.finalizeExpiredDispute(intentId);
 
-        // Defaults to fill-valid: maker gets escrowed funds + half bond
-        assertEq(usdc.balanceOf(makerA) - makerABalBefore, 10_000e6 + bondAmount / 2);
-        assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Settled);
+        // Maker must defend; silence convicts. Taker refunded, maker slashed.
+        // Slash: 10k fill → 10k * (2 + 650/10_000) = 20_650e6
+        uint256 expectedSlash = 20_650e6;
+        assertEq(usdc.balanceOf(taker) - takerBalBefore, 10_000e6);
+        assertEq(usdc.balanceOf(makerB) - makerBBalBefore, bondAmount + expectedSlash / 4);
+        assertEq(staking.getMakerInfo(makerA).stakedAmount, 100_000e6 - expectedSlash);
+        assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Expired);
     }
 
     // =========================================================================

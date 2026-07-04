@@ -7,9 +7,10 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {GauloiStaking} from "../../src/GauloiStaking.sol";
 import {GauloiEscrow} from "../../src/GauloiEscrow.sol";
 import {GauloiDisputes} from "../../src/GauloiDisputes.sol";
+import {IResolver} from "../../src/interfaces/IResolver.sol";
+import {MockResolver} from "../helpers/MockResolver.sol";
 import {DataTypes} from "../../src/types/DataTypes.sol";
 import {IntentLib} from "../../src/libraries/IntentLib.sol";
-import {SignatureLib} from "../../src/libraries/SignatureLib.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /// @notice Fork tests against real Ethereum mainnet USDC and USDT.
@@ -29,6 +30,7 @@ contract ForkSettlementTest is Test {
     GauloiStaking public staking;
     GauloiEscrow public escrow;
     GauloiDisputes public disputes;
+    MockResolver public resolver;
 
     IERC20 public usdc;
     IERC20 public usdt;
@@ -73,8 +75,9 @@ contract ForkSettlementTest is Test {
         escrow = new GauloiEscrow(address(staking), SETTLEMENT_WINDOW, COMMITMENT_TIMEOUT, owner);
         disputes = new GauloiDisputes(
             address(staking), address(escrow), USDC,
-            RESOLUTION_WINDOW, BOND_BPS, MIN_BOND, owner
+            RESOLUTION_WINDOW, BOND_BPS, MIN_BOND, makeAddr("treasury"), owner
         );
+        resolver = new MockResolver();
 
         // Wire contracts
         vm.startPrank(owner);
@@ -83,6 +86,7 @@ contract ForkSettlementTest is Test {
         escrow.setDisputes(address(disputes));
         escrow.addSupportedToken(USDC);
         escrow.addSupportedToken(USDT);
+        disputes.setResolver(DEST_CHAIN, address(resolver));
         vm.stopPrank();
 
         // Fund accounts from whales
@@ -152,20 +156,6 @@ contract ForkSettlementTest is Test {
             escrow.domainSeparator(), structHash
         );
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(takerKey, digest);
-        return abi.encodePacked(r, s, v);
-    }
-
-    function _signAttestation(
-        uint256 key, bytes32 intentId, bool fillValid,
-        bytes32 fillTxHash, uint256 destChainId
-    ) internal view returns (bytes memory) {
-        bytes32 structHash = SignatureLib.hashAttestation(
-            intentId, fillValid, fillTxHash, destChainId
-        );
-        bytes32 digest = MessageHashUtils.toTypedDataHash(
-            disputes.domainSeparator(), structHash
-        );
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
         return abi.encodePacked(r, s, v);
     }
 
@@ -301,33 +291,33 @@ contract ForkSettlementTest is Test {
 
         uint256 makerAStake = staking.getMakerInfo(makerA).stakedAmount;
 
-        // MakerB disputes
+        // MakerB challenges
         uint256 bondAmount = disputes.calculateDisputeBond(20_000e6);
         vm.startPrank(makerB);
         usdc.approve(address(disputes), bondAmount);
-        disputes.dispute(order);
+        disputes.challenge(order);
         vm.stopPrank();
 
-        // MakerC attests: fill is invalid
-        bytes memory attestSig = _signAttestation(makerCKey, intentId, false, fakeFill, DEST_CHAIN);
-        bytes[] memory sigs = new bytes[](1);
-        sigs[0] = attestSig;
+        // Corridor resolver rules the fill invalid
+        resolver.setVerdict(IResolver.Verdict.Invalid);
 
         uint256 takerBalBefore = usdc.balanceOf(taker);
         uint256 makerBBalBefore = usdc.balanceOf(makerB);
 
-        disputes.resolveDispute(intentId, false, sigs);
+        disputes.resolve(intentId, "");
 
         // Taker refunded
         assertEq(usdc.balanceOf(taker) - takerBalBefore, 20_000e6);
 
-        // MakerB gets bond back + 25% of slashed stake
-        uint256 expectedReward = bondAmount + (makerAStake / 4);
-        assertEq(usdc.balanceOf(makerB) - makerBBalBefore, expectedReward);
+        // Slash curve: 20k fill -> 20k * (2 + 650/20_000) = 40_650e6
+        uint256 expectedSlash = 40_650e6;
 
-        // MakerA slashed
-        assertFalse(staking.isActiveMaker(makerA));
-        assertEq(staking.getMakerInfo(makerA).stakedAmount, 0);
+        // MakerB gets bond back + 25% of the slash
+        assertEq(usdc.balanceOf(makerB) - makerBBalBefore, bondAmount + expectedSlash / 4);
+
+        // MakerA partially slashed, still active above min stake
+        assertEq(staking.getMakerInfo(makerA).stakedAmount, makerAStake - expectedSlash);
+        assertTrue(staking.isActiveMaker(makerA));
     }
 
     // =========================================================================

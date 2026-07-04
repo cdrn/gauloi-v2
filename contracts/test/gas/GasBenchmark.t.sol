@@ -3,12 +3,13 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {MockERC20} from "../helpers/MockERC20.sol";
+import {MockResolver} from "../helpers/MockResolver.sol";
 import {GauloiStaking} from "../../src/GauloiStaking.sol";
 import {GauloiEscrow} from "../../src/GauloiEscrow.sol";
 import {GauloiDisputes} from "../../src/GauloiDisputes.sol";
+import {IResolver} from "../../src/interfaces/IResolver.sol";
 import {DataTypes} from "../../src/types/DataTypes.sol";
 import {IntentLib} from "../../src/libraries/IntentLib.sol";
-import {SignatureLib} from "../../src/libraries/SignatureLib.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /// @title Gas Benchmark — isolated per-operation gas measurements
@@ -19,8 +20,10 @@ contract GasBenchmark is Test {
     GauloiStaking staking;
     GauloiEscrow escrow;
     GauloiDisputes disputes;
+    MockResolver resolver;
 
     address owner = makeAddr("owner");
+    address treasury = makeAddr("treasury");
 
     // Taker with private key
     uint256 takerKey = 0x7A4E5;
@@ -57,14 +60,16 @@ contract GasBenchmark is Test {
         escrow = new GauloiEscrow(address(staking), SETTLEMENT_WINDOW, COMMITMENT_TIMEOUT, owner);
         disputes = new GauloiDisputes(
             address(staking), address(escrow), address(usdc),
-            RESOLUTION_WINDOW, BOND_BPS, MIN_BOND, owner
+            RESOLUTION_WINDOW, BOND_BPS, MIN_BOND, treasury, owner
         );
+        resolver = new MockResolver();
 
         vm.startPrank(owner);
         staking.setEscrow(address(escrow));
         staking.setDisputes(address(disputes));
         escrow.setDisputes(address(disputes));
         escrow.addSupportedToken(address(usdc));
+        disputes.setResolver(DEST_CHAIN_ID, address(resolver));
         vm.stopPrank();
 
         // Fund everyone generously
@@ -174,33 +179,37 @@ contract GasBenchmark is Test {
     //  Disputes
     // ═══════════════════════════════════════════
 
-    function test_gas_dispute() public {
+    function test_gas_challenge() public {
         (, DataTypes.Order memory order) = _setupDisputableIntent();
 
         vm.startPrank(maker2);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(order);
+        disputes.challenge(order);
         vm.stopPrank();
     }
 
-    function test_gas_resolveDispute() public {
+    function test_gas_resolve_valid() public {
         (bytes32 intentId, DataTypes.Order memory order) = _setupDisputableIntent();
 
-        // Maker2 disputes
         vm.startPrank(maker2);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(order);
+        disputes.challenge(order);
         vm.stopPrank();
 
-        // Maker3 attests fill is valid
-        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
-        bytes memory sig = _signAttestation(
-            maker3Key, intentId, true, commitment.fillTxHash, order.destinationChainId
-        );
-        bytes[] memory sigs = new bytes[](1);
-        sigs[0] = sig;
+        resolver.setVerdict(IResolver.Verdict.Valid);
+        disputes.resolve(intentId, "");
+    }
 
-        disputes.resolveDispute(intentId, true, sigs);
+    function test_gas_resolve_invalid() public {
+        (bytes32 intentId, DataTypes.Order memory order) = _setupDisputableIntent();
+
+        vm.startPrank(maker2);
+        usdc.approve(address(disputes), type(uint256).max);
+        disputes.challenge(order);
+        vm.stopPrank();
+
+        resolver.setVerdict(IResolver.Verdict.Invalid);
+        disputes.resolve(intentId, "");
     }
 
     function test_gas_finalizeExpiredDispute() public {
@@ -208,70 +217,11 @@ contract GasBenchmark is Test {
 
         vm.startPrank(maker2);
         usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(order);
+        disputes.challenge(order);
         vm.stopPrank();
 
         vm.warp(block.timestamp + RESOLUTION_WINDOW + 1);
         disputes.finalizeExpiredDispute(intentId);
-    }
-
-    function test_gas_resolveDispute_stakeWeighted() public {
-        // 3 attestors with different stakes
-        uint256 maker4Key = 0xD00D;
-        uint256 maker5Key = 0xBAAD;
-        uint256 maker6Key = 0xFACE;
-        address maker4 = vm.addr(maker4Key);
-        address maker5 = vm.addr(maker5Key);
-        address maker6 = vm.addr(maker6Key);
-
-        usdc.mint(maker4, 10_000_000e6);
-        usdc.mint(maker5, 10_000_000e6);
-        usdc.mint(maker6, 10_000_000e6);
-        _stake(maker4, 50_000e6);
-        _stake(maker5, 30_000e6);
-        _stake(maker6, 20_000e6);
-
-        _stake(maker1, 50_000e6);
-        _stake(maker2, 50_000e6);
-
-        (bytes32 intentId, DataTypes.Order memory order) = _fillIntent(10_000e6);
-        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
-
-        vm.startPrank(maker2);
-        usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(order);
-        vm.stopPrank();
-
-        bytes memory sig4 = _signAttestation(maker4Key, intentId, true, commitment.fillTxHash, order.destinationChainId);
-        bytes memory sig5 = _signAttestation(maker5Key, intentId, true, commitment.fillTxHash, order.destinationChainId);
-        bytes memory sig6 = _signAttestation(maker6Key, intentId, true, commitment.fillTxHash, order.destinationChainId);
-
-        bytes[] memory sigs = new bytes[](3);
-        sigs[0] = sig4;
-        sigs[1] = sig5;
-        sigs[2] = sig6;
-
-        disputes.resolveDispute(intentId, true, sigs);
-    }
-
-    function test_gas_slashPartial() public {
-        _stake(maker1, 50_000e6);
-        _stake(maker2, 50_000e6);
-        _stake(maker3, 50_000e6);
-
-        (bytes32 intentId, DataTypes.Order memory order) = _fillIntent(10_000e6);
-        DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
-
-        vm.startPrank(maker2);
-        usdc.approve(address(disputes), type(uint256).max);
-        disputes.dispute(order);
-        vm.stopPrank();
-
-        bytes memory sig = _signAttestation(maker3Key, intentId, false, commitment.fillTxHash, order.destinationChainId);
-        bytes[] memory sigs = new bytes[](1);
-        sigs[0] = sig;
-
-        disputes.resolveDispute(intentId, false, sigs);
     }
 
     // ═══════════════════════════════════════════
@@ -340,18 +290,5 @@ contract GasBenchmark is Test {
         _stake(maker2, 50_000e6);
         _stake(maker3, 50_000e6);
         return _fillIntent(10_000e6);
-    }
-
-    function _signAttestation(
-        uint256 privateKey,
-        bytes32 intentId,
-        bool fillValid,
-        bytes32 fillTxHash,
-        uint256 destChainId
-    ) internal view returns (bytes memory) {
-        bytes32 structHash = SignatureLib.hashAttestation(intentId, fillValid, fillTxHash, destChainId);
-        bytes32 digest = MessageHashUtils.toTypedDataHash(disputes.domainSeparator(), structHash);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
-        return abi.encodePacked(r, s, v);
     }
 }
