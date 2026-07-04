@@ -282,7 +282,7 @@ contract CouncilResolverIntegrationTest is BaseTest {
         vm.prank(makerAddr);
         bytes32 intentId = escrow.executeOrder(order, sig);
         vm.prank(makerAddr);
-        escrow.submitFill(intentId, keccak256("tx"));
+        escrow.submitFill(order, keccak256("tx"));
 
         // Challenge
         vm.prank(challengerAddr);
@@ -323,7 +323,7 @@ contract CouncilResolverIntegrationTest is BaseTest {
         vm.prank(makerAddr);
         bytes32 intentId = escrow.executeOrder(order, sig);
         vm.prank(makerAddr);
-        escrow.submitFill(intentId, keccak256("tx"));
+        escrow.submitFill(order, keccak256("tx"));
 
         vm.prank(challengerAddr);
         disputes.challenge(order);

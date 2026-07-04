@@ -21,6 +21,12 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
     uint256 public settlementWindowDuration;
     uint256 public commitmentTimeoutDuration;
 
+    // Per-corridor settlement window overrides (destination chain id => window).
+    // 0 means "use the default". The window is an insurance premium priced by
+    // corridor verifiability: provable corridors shrink toward destination
+    // finality, council corridors stay wide.
+    mapping(uint256 => uint256) public corridorSettlementWindow;
+
     bytes32 public immutable domainSeparator;
 
     // Token whitelist
@@ -68,6 +74,16 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
         uint256 oldValue = settlementWindowDuration;
         settlementWindowDuration = newWindow;
         emit SettlementWindowUpdated(oldValue, newWindow);
+    }
+
+    function setCorridorSettlementWindow(uint256 destinationChainId, uint256 newWindow) external onlyOwner {
+        require(
+            newWindow == 0 || (newWindow >= 1 minutes && newWindow <= 7 days),
+            "GauloiEscrow: window out of range"
+        );
+        uint256 oldValue = corridorSettlementWindow[destinationChainId];
+        corridorSettlementWindow[destinationChainId] = newWindow;
+        emit CorridorSettlementWindowUpdated(destinationChainId, oldValue, newWindow);
     }
 
     function setCommitmentTimeout(uint256 newTimeout) external onlyOwner {
@@ -161,7 +177,11 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
         );
     }
 
-    function submitFill(bytes32 intentId, bytes32 destinationTxHash) external nonReentrant {
+    /// @dev Takes the full order so the dispute window can be priced per corridor.
+    ///      The order is bound to the commitment via intentId — a mismatched order
+    ///      computes a different id and fails the state/maker checks.
+    function submitFill(DataTypes.Order calldata order, bytes32 destinationTxHash) external nonReentrant {
+        bytes32 intentId = IntentLib.computeIntentId(order);
         DataTypes.Commitment storage commitment = _commitments[intentId];
         require(commitment.state == DataTypes.IntentState.Committed, "GauloiEscrow: not committed");
         require(commitment.maker == msg.sender, "GauloiEscrow: not committed maker");
@@ -170,7 +190,8 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
 
         commitment.state = DataTypes.IntentState.Filled;
         commitment.fillTxHash = destinationTxHash;
-        commitment.disputeWindowEnd = SafeCast.toUint40(block.timestamp + settlementWindowDuration);
+        commitment.disputeWindowEnd =
+            SafeCast.toUint40(block.timestamp + settlementWindowFor(order.destinationChainId));
 
         emit FillSubmitted(intentId, msg.sender, destinationTxHash, commitment.disputeWindowEnd);
     }
@@ -304,6 +325,11 @@ contract GauloiEscrow is IGauloiEscrow, Ownable, ReentrancyGuard {
 
     function settlementWindow() external view returns (uint256) {
         return settlementWindowDuration;
+    }
+
+    function settlementWindowFor(uint256 destinationChainId) public view returns (uint256) {
+        uint256 corridorWindow = corridorSettlementWindow[destinationChainId];
+        return corridorWindow == 0 ? settlementWindowDuration : corridorWindow;
     }
 
     function commitmentTimeout() external view returns (uint256) {

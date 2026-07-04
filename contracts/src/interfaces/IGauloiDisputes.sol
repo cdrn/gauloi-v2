@@ -13,6 +13,7 @@ interface IGauloiDisputes {
     event ChallengerRewardFailed(bytes32 indexed intentId, address indexed challenger, uint256 amount);
     event TreasuryTransferFailed(bytes32 indexed intentId, uint256 amount);
     event ResolutionWindowUpdated(uint256 oldValue, uint256 newValue);
+    event CorridorResolutionWindowUpdated(uint256 indexed destinationChainId, uint256 oldValue, uint256 newValue);
     event BondParamsUpdated(uint256 newBps, uint256 newMinBond);
     event SlashCurveUpdated(uint256 base, uint256 k, uint256 max);
     event ResolverUpdated(uint256 indexed destinationChainId, address indexed oldResolver, address indexed newResolver);

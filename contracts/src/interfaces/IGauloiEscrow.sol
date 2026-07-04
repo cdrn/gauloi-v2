@@ -28,6 +28,7 @@ interface IGauloiEscrow {
     event Unpaused(address indexed caller);
     event DisputesUpdated(address oldDisputes, address newDisputes);
     event SettlementWindowUpdated(uint256 oldValue, uint256 newValue);
+    event CorridorSettlementWindowUpdated(uint256 indexed destinationChainId, uint256 oldValue, uint256 newValue);
     event CommitmentTimeoutUpdated(uint256 oldValue, uint256 newValue);
     event TokenAdded(address indexed token);
     event TokenRemoved(address indexed token);
@@ -39,8 +40,8 @@ interface IGauloiEscrow {
         bytes calldata takerSignature
     ) external returns (bytes32 intentId);
 
-    // Maker submits fill evidence (destination tx hash)
-    function submitFill(bytes32 intentId, bytes32 destinationTxHash) external;
+    // Maker submits fill evidence (destination tx hash); order binds via intentId
+    function submitFill(DataTypes.Order calldata order, bytes32 destinationTxHash) external;
 
     // Settle a single intent after dispute window
     function settle(DataTypes.Order calldata order) external;
@@ -62,5 +63,6 @@ interface IGauloiEscrow {
     // --- View functions ---
     function getCommitment(bytes32 intentId) external view returns (DataTypes.Commitment memory);
     function settlementWindow() external view returns (uint256);
+    function settlementWindowFor(uint256 destinationChainId) external view returns (uint256);
     function commitmentTimeout() external view returns (uint256);
 }

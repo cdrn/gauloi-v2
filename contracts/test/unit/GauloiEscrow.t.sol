@@ -172,7 +172,7 @@ contract GauloiEscrowTest is BaseTest {
         bytes32 txHash = keccak256("dest_tx_hash");
 
         vm.prank(maker1);
-        escrow.submitFill(intentId, txHash);
+        escrow.submitFill(order, txHash);
 
         DataTypes.Commitment memory commitment = escrow.getCommitment(intentId);
         assertTrue(commitment.state == DataTypes.IntentState.Filled);
@@ -180,31 +180,76 @@ contract GauloiEscrowTest is BaseTest {
         assertEq(commitment.disputeWindowEnd, uint40(block.timestamp + SETTLEMENT_WINDOW));
     }
 
+    function test_submitFill_corridorWindowOverride() public {
+        // Provable corridor gets a tighter window than the default
+        vm.prank(owner);
+        escrow.setCorridorSettlementWindow(DEST_CHAIN_ID, 2 minutes);
+        assertEq(escrow.settlementWindowFor(DEST_CHAIN_ID), 2 minutes);
+        assertEq(escrow.settlementWindowFor(999), SETTLEMENT_WINDOW); // others default
+
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+        vm.prank(maker1);
+        escrow.submitFill(order, keccak256("hash"));
+
+        assertEq(
+            escrow.getCommitment(intentId).disputeWindowEnd,
+            uint40(block.timestamp + 2 minutes)
+        );
+
+        // Clearing the override restores the default
+        vm.prank(owner);
+        escrow.setCorridorSettlementWindow(DEST_CHAIN_ID, 0);
+        assertEq(escrow.settlementWindowFor(DEST_CHAIN_ID), SETTLEMENT_WINDOW);
+    }
+
+    function test_setCorridorSettlementWindow_bounds() public {
+        vm.startPrank(owner);
+        vm.expectRevert("GauloiEscrow: window out of range");
+        escrow.setCorridorSettlementWindow(DEST_CHAIN_ID, 30 seconds);
+        vm.expectRevert("GauloiEscrow: window out of range");
+        escrow.setCorridorSettlementWindow(DEST_CHAIN_ID, 8 days);
+        vm.stopPrank();
+
+        vm.prank(maker1);
+        vm.expectRevert();
+        escrow.setCorridorSettlementWindow(DEST_CHAIN_ID, 2 minutes);
+    }
+
+    function test_submitFill_orderMismatchReverts() public {
+        // A different order than the one executed computes a different intentId
+        (, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+        order.inputAmount = 20_000e6; // tamper
+
+        vm.prank(maker1);
+        vm.expectRevert("GauloiEscrow: not committed");
+        escrow.submitFill(order, keccak256("hash"));
+    }
+
     function test_submitFill_notCommittedMaker_reverts() public {
-        (bytes32 intentId, ) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
 
         _stakeMaker(maker2, 50_000e6);
         vm.prank(maker2);
         vm.expectRevert("GauloiEscrow: not committed maker");
-        escrow.submitFill(intentId, keccak256("hash"));
+        escrow.submitFill(order, keccak256("hash"));
     }
 
     function test_submitFill_afterCommitmentExpiry_reverts() public {
-        (bytes32 intentId, ) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
 
         vm.warp(block.timestamp + COMMITMENT_TIMEOUT + 1);
 
         vm.prank(maker1);
         vm.expectRevert("GauloiEscrow: commitment expired");
-        escrow.submitFill(intentId, keccak256("hash"));
+        escrow.submitFill(order, keccak256("hash"));
     }
 
     function test_submitFill_emptyTxHash_reverts() public {
-        (bytes32 intentId, ) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
 
         vm.prank(maker1);
         vm.expectRevert("GauloiEscrow: empty tx hash");
-        escrow.submitFill(intentId, bytes32(0));
+        escrow.submitFill(order, bytes32(0));
     }
 
     // --- Settle ---
@@ -213,7 +258,7 @@ contract GauloiEscrowTest is BaseTest {
         (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
 
         vm.prank(maker1);
-        escrow.submitFill(intentId, keccak256("hash"));
+        escrow.submitFill(order, keccak256("hash"));
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
 
@@ -230,7 +275,7 @@ contract GauloiEscrowTest is BaseTest {
         (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
 
         vm.prank(maker1);
-        escrow.submitFill(intentId, keccak256("hash"));
+        escrow.submitFill(order, keccak256("hash"));
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW - 1);
 
@@ -252,8 +297,8 @@ contract GauloiEscrowTest is BaseTest {
         (bytes32 id2, DataTypes.Order memory order2) = _createAndExecuteOrder(5_000e6, 4_990e6, maker1);
 
         vm.startPrank(maker1);
-        escrow.submitFill(id1, keccak256("hash1"));
-        escrow.submitFill(id2, keccak256("hash2"));
+        escrow.submitFill(order1, keccak256("hash1"));
+        escrow.submitFill(order2, keccak256("hash2"));
         vm.stopPrank();
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
@@ -275,8 +320,8 @@ contract GauloiEscrowTest is BaseTest {
         (bytes32 id2, DataTypes.Order memory order2) = _createAndExecuteOrder(5_000e6, 4_990e6, maker1);
 
         vm.startPrank(maker1);
-        escrow.submitFill(id1, keccak256("hash1"));
-        escrow.submitFill(id2, keccak256("hash2"));
+        escrow.submitFill(order1, keccak256("hash1"));
+        escrow.submitFill(order2, keccak256("hash2"));
         vm.stopPrank();
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
@@ -332,7 +377,7 @@ contract GauloiEscrowTest is BaseTest {
         (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
 
         vm.prank(maker1);
-        escrow.submitFill(intentId, keccak256("hash"));
+        escrow.submitFill(order, keccak256("hash"));
 
         vm.warp(block.timestamp + 2 hours);
 
@@ -344,10 +389,10 @@ contract GauloiEscrowTest is BaseTest {
     // --- Disputes integration ---
 
     function test_setDisputed() public {
-        (bytes32 intentId, ) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
 
         vm.prank(maker1);
-        escrow.submitFill(intentId, keccak256("hash"));
+        escrow.submitFill(order, keccak256("hash"));
 
         vm.prank(mockDisputes);
         escrow.setDisputed(intentId);
@@ -359,7 +404,7 @@ contract GauloiEscrowTest is BaseTest {
         (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
 
         vm.prank(maker1);
-        escrow.submitFill(intentId, keccak256("hash"));
+        escrow.submitFill(order, keccak256("hash"));
 
         vm.prank(mockDisputes);
         escrow.setDisputed(intentId);
@@ -377,7 +422,7 @@ contract GauloiEscrowTest is BaseTest {
         (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
 
         vm.prank(maker1);
-        escrow.submitFill(intentId, keccak256("hash"));
+        escrow.submitFill(order, keccak256("hash"));
 
         vm.prank(mockDisputes);
         escrow.setDisputed(intentId);
@@ -392,10 +437,10 @@ contract GauloiEscrowTest is BaseTest {
     }
 
     function test_setDisputed_notDisputes_reverts() public {
-        (bytes32 intentId, ) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
 
         vm.prank(maker1);
-        escrow.submitFill(intentId, keccak256("hash"));
+        escrow.submitFill(order, keccak256("hash"));
 
         vm.prank(maker1);
         vm.expectRevert("GauloiEscrow: caller is not disputes");
@@ -443,7 +488,7 @@ contract GauloiEscrowTest is BaseTest {
         (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
 
         vm.prank(maker1);
-        escrow.submitFill(intentId, keccak256("hash"));
+        escrow.submitFill(order, keccak256("hash"));
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
 
@@ -475,7 +520,7 @@ contract GauloiEscrowTest is BaseTest {
 
     function test_executeOrder_normalTimestamp_succeeds() public {
         // Sanity check: normal durations work after SafeCast is in place
-        (bytes32 intentId, ) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndExecuteOrder(10_000e6, 9_990e6, maker1);
 
         DataTypes.Commitment memory c = escrow.getCommitment(intentId);
         assertEq(c.commitmentDeadline, uint40(block.timestamp + COMMITMENT_TIMEOUT));
@@ -613,8 +658,8 @@ contract GauloiEscrowTest is BaseTest {
         (bytes32 id2, DataTypes.Order memory order2) = _createAndExecuteOrder(5_000e6, 4_990e6, maker1);
 
         vm.startPrank(maker1);
-        escrow.submitFill(id1, keccak256("hash1"));
-        escrow.submitFill(id2, keccak256("hash2"));
+        escrow.submitFill(order1, keccak256("hash1"));
+        escrow.submitFill(order2, keccak256("hash2"));
         vm.stopPrank();
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
@@ -695,7 +740,7 @@ contract GauloiEscrowTest is BaseTest {
         bytes32 intentId = bEscrow.executeOrder(order, sig);
 
         vm.prank(maker1);
-        bEscrow.submitFill(intentId, keccak256("hash"));
+        bEscrow.submitFill(order, keccak256("hash"));
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
 
@@ -765,7 +810,7 @@ contract GauloiEscrowTest is BaseTest {
 
         // Maker fills
         vm.prank(maker1);
-        escrow.submitFill(intentId, keccak256("real_tx_hash"));
+        escrow.submitFill(order, keccak256("real_tx_hash"));
         assertTrue(escrow.getCommitment(intentId).state == DataTypes.IntentState.Filled);
 
         // Wait for dispute window
