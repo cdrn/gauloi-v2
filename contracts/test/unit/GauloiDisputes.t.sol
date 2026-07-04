@@ -89,7 +89,7 @@ contract GauloiDisputesTest is BaseTest {
         bytes32 intentId = escrow.executeOrder(order, sig);
 
         vm.prank(maker1Addr);
-        escrow.submitFill(intentId, keccak256("dest_tx"));
+        escrow.submitFill(order, keccak256("dest_tx"));
 
         return (intentId, order);
     }
@@ -98,6 +98,36 @@ contract GauloiDisputesTest is BaseTest {
         vm.prank(who);
         disputes.challenge(order);
         return IntentLib.computeIntentId(order);
+    }
+
+    // =========================================================================
+    // Corridor resolution windows
+    // =========================================================================
+
+    function test_challenge_corridorResolutionWindowOverride() public {
+        vm.prank(owner);
+        disputes.setCorridorResolutionWindow(DEST_CHAIN_ID, 2 hours);
+        assertEq(disputes.resolutionWindowFor(DEST_CHAIN_ID), 2 hours);
+        assertEq(disputes.resolutionWindowFor(999), RESOLUTION_WINDOW);
+
+        (bytes32 intentId, DataTypes.Order memory order) = _createAndFillIntent(10_000e6);
+        _challengeAs(challenger, order);
+
+        assertEq(disputes.getDispute(intentId).disputeDeadline, block.timestamp + 2 hours);
+    }
+
+    function test_setCorridorResolutionWindow_bounds() public {
+        vm.startPrank(owner);
+        vm.expectRevert("GauloiDisputes: window out of range");
+        disputes.setCorridorResolutionWindow(DEST_CHAIN_ID, 30 minutes);
+        vm.expectRevert("GauloiDisputes: window out of range");
+        disputes.setCorridorResolutionWindow(DEST_CHAIN_ID, 31 days);
+        disputes.setCorridorResolutionWindow(DEST_CHAIN_ID, 0); // clearing allowed
+        vm.stopPrank();
+
+        vm.prank(challenger);
+        vm.expectRevert();
+        disputes.setCorridorResolutionWindow(DEST_CHAIN_ID, 2 hours);
     }
 
     // =========================================================================
@@ -357,7 +387,7 @@ contract GauloiDisputesTest is BaseTest {
         vm.prank(maker1Addr);
         bytes32 intentId = escrow.executeOrder(order, sig);
         vm.prank(maker1Addr);
-        escrow.submitFill(intentId, keccak256("tx"));
+        escrow.submitFill(order, keccak256("tx"));
 
         _challengeAs(challenger, order);
 
@@ -607,7 +637,7 @@ contract GauloiDisputesBlacklistTest is BaseTest {
         vm.prank(maker1Addr);
         bytes32 intentId = escrow.executeOrder(order, sig);
         vm.prank(maker1Addr);
-        escrow.submitFill(intentId, keccak256("tx"));
+        escrow.submitFill(order, keccak256("tx"));
 
         vm.prank(challenger);
         disputes.challenge(order);

@@ -166,7 +166,7 @@ contract SettlementLoopTest is Test {
         // 2. MakerA fills on dest chain (simulated) and submits evidence
         bytes32 fillTx = keccak256("arb_tx_0x1234");
         vm.prank(makerA);
-        escrow.submitFill(intentId, fillTx);
+        escrow.submitFill(order, fillTx);
 
         // 3. Wait for settlement window
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
@@ -190,7 +190,7 @@ contract SettlementLoopTest is Test {
         bytes32 intentId = escrow.executeOrder(order, sig);
 
         vm.prank(makerA);
-        escrow.submitFill(intentId, keccak256("fill_tx"));
+        escrow.submitFill(order, keccak256("fill_tx"));
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
         escrow.settle(order);
@@ -217,7 +217,7 @@ contract SettlementLoopTest is Test {
             ids[i] = escrow.executeOrder(orders[i], sig);
 
             vm.prank(makerA);
-            escrow.submitFill(ids[i], keccak256(abi.encode("fill", i)));
+            escrow.submitFill(orders[i], keccak256(abi.encode("fill", i)));
         }
 
         assertEq(staking.getMakerInfo(makerA).activeExposure, 50_000e6);
@@ -273,7 +273,7 @@ contract SettlementLoopTest is Test {
         bytes32 intentId = escrow.executeOrder(order, sig);
 
         vm.prank(makerA);
-        escrow.submitFill(intentId, fillTx);
+        escrow.submitFill(order, fillTx);
 
         // MakerB challenges (incorrectly)
         uint256 bondAmount = disputes.calculateDisputeBond(20_000e6);
@@ -316,7 +316,7 @@ contract SettlementLoopTest is Test {
         bytes32 intentId = escrow.executeOrder(order, sig);
 
         vm.prank(makerA);
-        escrow.submitFill(intentId, fakeFillTx);
+        escrow.submitFill(order, fakeFillTx);
 
         // MakerB challenges (correctly)
         uint256 bondAmount = disputes.calculateDisputeBond(20_000e6);
@@ -364,7 +364,7 @@ contract SettlementLoopTest is Test {
         bytes32 intentId = escrow.executeOrder(order, sig);
 
         vm.prank(makerA);
-        escrow.submitFill(intentId, keccak256("fill"));
+        escrow.submitFill(order, keccak256("fill"));
 
         uint256 bondAmount = disputes.calculateDisputeBond(10_000e6);
         vm.startPrank(makerB);
@@ -401,7 +401,7 @@ contract SettlementLoopTest is Test {
         bytes32 id1 = escrow.executeOrder(order1, sig1);
 
         vm.prank(makerA);
-        escrow.submitFill(id1, keccak256("fill_a"));
+        escrow.submitFill(order1, keccak256("fill_a"));
 
         // Intent 2: filled by makerB
         DataTypes.Order memory order2 = _makeOrder(address(usdc), 15_000e6, address(usdc), 14_990e6);
@@ -411,7 +411,7 @@ contract SettlementLoopTest is Test {
         bytes32 id2 = escrow.executeOrder(order2, sig2);
 
         vm.prank(makerB);
-        escrow.submitFill(id2, keccak256("fill_b"));
+        escrow.submitFill(order2, keccak256("fill_b"));
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
 

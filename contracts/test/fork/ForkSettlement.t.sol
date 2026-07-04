@@ -179,7 +179,7 @@ contract ForkSettlementTest is Test {
 
         // 2. MakerA submits fill evidence
         vm.prank(makerA);
-        escrow.submitFill(intentId, keccak256("arb_tx_real"));
+        escrow.submitFill(order, keccak256("arb_tx_real"));
 
         // 3. Wait for settlement window
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
@@ -212,7 +212,7 @@ contract ForkSettlementTest is Test {
 
         // Maker submits fill
         vm.prank(makerA);
-        escrow.submitFill(intentId, keccak256("fill_usdt"));
+        escrow.submitFill(order, keccak256("fill_usdt"));
 
         vm.warp(block.timestamp + SETTLEMENT_WINDOW);
         escrow.settle(order);
@@ -257,10 +257,10 @@ contract ForkSettlementTest is Test {
             bytes memory sig = _signOrder(orders[i]);
 
             vm.prank(makerA);
-            bytes32 intentId = escrow.executeOrder(orders[i], sig);
+            escrow.executeOrder(orders[i], sig);
 
             vm.startPrank(makerA);
-            escrow.submitFill(intentId, keccak256(abi.encode("fill", i)));
+            escrow.submitFill(orders[i], keccak256(abi.encode("fill", i)));
             vm.stopPrank();
         }
 
@@ -287,7 +287,7 @@ contract ForkSettlementTest is Test {
         bytes32 intentId = escrow.executeOrder(order, sig);
 
         vm.prank(makerA);
-        escrow.submitFill(intentId, fakeFill);
+        escrow.submitFill(order, fakeFill);
 
         uint256 makerAStake = staking.getMakerInfo(makerA).stakedAmount;
 

@@ -45,6 +45,10 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
     // Corridor resolvers: destination chain id => terminal arbiter
     mapping(uint256 => IResolver) public resolvers;
 
+    // Per-corridor resolution window overrides (0 = use default) — proof corridors
+    // can afford tighter defense deadlines than council corridors
+    mapping(uint256 => uint256) public corridorResolutionWindow;
+
     mapping(bytes32 => DataTypes.Dispute) internal _disputes;
     mapping(bytes32 => DataTypes.Order) internal _disputeOrders;
 
@@ -99,6 +103,16 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
         emit ResolutionWindowUpdated(oldValue, newWindow);
     }
 
+    function setCorridorResolutionWindow(uint256 destinationChainId, uint256 newWindow) external onlyOwner {
+        require(
+            newWindow == 0 || (newWindow >= 1 hours && newWindow <= 30 days),
+            "GauloiDisputes: window out of range"
+        );
+        uint256 oldValue = corridorResolutionWindow[destinationChainId];
+        corridorResolutionWindow[destinationChainId] = newWindow;
+        emit CorridorResolutionWindowUpdated(destinationChainId, oldValue, newWindow);
+    }
+
     function setDisputeBondParams(uint256 newBps, uint256 newMinBond) external onlyOwner {
         require(newBps <= 10_000, "GauloiDisputes: bps exceeds 100%");
         disputeBondBps = newBps;
@@ -140,7 +154,7 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
             intentId: intentId,
             challenger: msg.sender,
             bondAmount: bondAmount,
-            disputeDeadline: block.timestamp + disputeResolutionDuration,
+            disputeDeadline: block.timestamp + resolutionWindowFor(order.destinationChainId),
             resolved: false,
             fillDeemedValid: false
         });
@@ -302,5 +316,10 @@ contract GauloiDisputes is IGauloiDisputes, Ownable, ReentrancyGuard {
 
     function disputeResolutionWindow() external view returns (uint256) {
         return disputeResolutionDuration;
+    }
+
+    function resolutionWindowFor(uint256 destinationChainId) public view returns (uint256) {
+        uint256 corridorWindow = corridorResolutionWindow[destinationChainId];
+        return corridorWindow == 0 ? disputeResolutionDuration : corridorWindow;
     }
 }

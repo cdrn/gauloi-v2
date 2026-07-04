@@ -129,10 +129,10 @@ contract GasBenchmark is Test {
 
     function test_gas_submitFill() public {
         _stake(maker1, 50_000e6);
-        (bytes32 intentId, ) = _executeOrder(10_000e6);
+        (, DataTypes.Order memory order) = _executeOrder(10_000e6);
 
         vm.prank(maker1);
-        escrow.submitFill(intentId, keccak256("dest_tx"));
+        escrow.submitFill(order, keccak256("dest_tx"));
     }
 
     function test_gas_settle() public {
@@ -280,7 +280,7 @@ contract GasBenchmark is Test {
     function _fillIntent(uint256 amount) internal returns (bytes32, DataTypes.Order memory) {
         (bytes32 id, DataTypes.Order memory order) = _executeOrder(amount);
         vm.startPrank(maker1);
-        escrow.submitFill(id, keccak256(abi.encodePacked("tx", id)));
+        escrow.submitFill(order, keccak256(abi.encodePacked("tx", id)));
         vm.stopPrank();
         return (id, order);
     }
