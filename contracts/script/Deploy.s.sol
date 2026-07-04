@@ -6,11 +6,25 @@ import {MockERC20} from "../test/helpers/MockERC20.sol";
 import {GauloiStaking} from "../src/GauloiStaking.sol";
 import {GauloiEscrow} from "../src/GauloiEscrow.sol";
 import {GauloiDisputes} from "../src/GauloiDisputes.sol";
+import {GauloiFillRegistry} from "../src/GauloiFillRegistry.sol";
+import {CouncilResolver} from "../src/resolvers/CouncilResolver.sol";
 
+/// @notice Deploys the full v0.2 stack on one chain:
+///         Staking + Escrow + Disputes + FillRegistry + CouncilResolver.
+///
+///         Env:
+///         - DEPLOYER_KEY (required)
+///         - USDC_ADDRESS (optional — deploys a mock if absent)
+///         - TREASURY (optional — defaults to deployer)
+///         - DEST_CHAIN_ID (optional — corridor to wire the council resolver for;
+///           e.g. 421614 when deploying on Eth Sepolia, 11155111 on Arb Sepolia)
+///         - MIN_STAKE, COOLDOWN, STALE_PRICE_THRESHOLD, SETTLEMENT_WINDOW,
+///           COMMITMENT_TIMEOUT, RESOLUTION_WINDOW, BOND_BPS, MIN_BOND (optional)
 contract Deploy is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_KEY");
         address deployer = vm.addr(deployerKey);
+        address treasury = vm.envOr("TREASURY", deployer);
 
         vm.startBroadcast(deployerKey);
 
@@ -42,34 +56,44 @@ contract Deploy is Script {
         );
         console.log("Escrow:", address(escrow));
 
+        // Deploy fill registry (destination-side; every chain is a destination)
+        GauloiFillRegistry registry = new GauloiFillRegistry();
+        console.log("FillRegistry:", address(registry));
+
+        // Deploy council resolver — bootstrap council is the deployer, 1-of-1,
+        // stated plainly in the README trust-model table until it isn't
+        address[] memory members = new address[](1);
+        members[0] = deployer;
+        CouncilResolver council = new CouncilResolver(members, 1, deployer);
+        console.log("CouncilResolver:", address(council));
+
         // Deploy disputes
-        GauloiDisputes disputes = _deployDisputes(address(staking), address(escrow), usdc, deployer);
+        GauloiDisputes disputes = new GauloiDisputes(
+            address(staking),
+            address(escrow),
+            usdc,
+            vm.envOr("RESOLUTION_WINDOW", uint256(24 hours)),
+            vm.envOr("BOND_BPS", uint256(200)),
+            vm.envOr("MIN_BOND", uint256(250e6)),
+            treasury,
+            deployer
+        );
         console.log("Disputes:", address(disputes));
 
         // Wire up permissions
         staking.setEscrow(address(escrow));
         staking.setDisputes(address(disputes));
         escrow.setDisputes(address(disputes));
+        escrow.setTreasury(treasury);
         escrow.addSupportedToken(usdc);
 
-        vm.stopBroadcast();
-    }
+        // Wire the corridor's resolver (destination chain served from this chain)
+        uint256 destChainId = vm.envOr("DEST_CHAIN_ID", uint256(0));
+        if (destChainId != 0) {
+            disputes.setResolver(destChainId, address(council));
+            console.log("Resolver wired for corridor:", destChainId);
+        }
 
-    function _deployDisputes(
-        address staking,
-        address escrow,
-        address usdc,
-        address owner
-    ) internal returns (GauloiDisputes) {
-        return new GauloiDisputes(
-            staking,
-            escrow,
-            usdc,
-            vm.envOr("RESOLUTION_WINDOW", uint256(24 hours)),
-            vm.envOr("BOND_BPS", uint256(200)),
-            vm.envOr("MIN_BOND", uint256(250e6)),
-            vm.envOr("TREASURY", owner),
-            owner
-        );
+        vm.stopBroadcast();
     }
 }
