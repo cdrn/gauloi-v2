@@ -11,8 +11,11 @@ interface IGauloiFillRegistry {
         address filler
     );
 
-    // Deliver `amount` of `token` to `recipient` and record the fill against `intentId`.
-    // Exactly one fill per intent — repeat calls for the same intentId revert.
+    // Deliver `amount` of `token` to `recipient` and record the fill against
+    // (intentId, msg.sender). One fill per (intent, filler) — a given filler
+    // cannot record the same intent twice, but distinct fillers have independent
+    // slots so no one can squat another maker's slot. Resolvers read the
+    // committed maker's slot; other fillers' records are ignored.
     function fill(bytes32 intentId, address token, address recipient, uint256 amount) external;
 
     // --- View functions ---

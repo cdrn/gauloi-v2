@@ -6,11 +6,13 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IGauloiFillRegistry} from "./interfaces/IGauloiFillRegistry.sol";
 
-/// @notice Destination-side fill registry. Makes fills canonical, unique, on-chain facts:
-///         one fill per intent, one intent per fill. Deployed on every chain Gauloi
-///         delivers to; makers route destination transfers through `fill()` instead of
-///         bare ERC-20 transfers, so a fill's existence and parameters can be checked
-///         (or storage-proven) against a single mapping slot.
+/// @notice Destination-side fill registry. Makes fills canonical on-chain facts,
+///         recorded per (intentId, filler): a given filler records an intent at most
+///         once, and distinct fillers have independent slots so no one can squat the
+///         committed maker's slot. Deployed on every chain Gauloi delivers to; makers
+///         route destination transfers through `fill()` instead of bare ERC-20
+///         transfers, so a fill's existence and parameters can be checked (or
+///         storage-proven) against a single mapping slot — the committed maker's.
 ///
 ///         Deliberately permissionless and admin-free: the registry records transfers,
 ///         it does not judge them. Whether a fill satisfies an order (token, recipient,
