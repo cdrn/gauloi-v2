@@ -1,15 +1,19 @@
 # gauloi-v2
-Cross chain stablecoin swapping protocol with baked in compliance
+
+Cross-chain stablecoin settlement protocol with compliance at the maker level.
+
+The stablecoin space is fragmenting on purpose: every issuer builds silo rails for its own coin, every L2 cuts its own issuance deal. None of them can build the cross-issuer layer, because it requires neutrality between issuers. Gauloi is that layer — intent-based settlement across any stablecoin pair and chain pair, where makers carry compliance and inventory, and the protocol is a neutral escrow-and-adjudication venue whose rules don't move.
 
 ## Architecture
 
-Intent-based cross-chain settlement. Takers want to move stablecoins between chains. Makers fill those orders and earn a spread. The protocol escrows the taker's funds on the source chain until the maker proves they delivered on the destination chain.
+Intent-based cross-chain settlement. Takers want to move stablecoins between chains. Makers fill those orders and earn a spread. The protocol escrows the taker's funds on the source chain until the fill on the destination chain is settled or successfully disputed.
 
-**Three contracts, deployed per chain:**
+**Contracts, deployed per chain:**
 
-- **GauloiStaking** — Makers stake USDC to participate. Stake gates participation, limits concurrent fill exposure, and backs dispute attestations. Fraudulent makers lose their entire stake.
+- **GauloiStaking** — Makers stake USDC to participate. Stake gates participation, caps concurrent fill exposure, and is the slashable collateral behind every fill claim.
 - **GauloiEscrow** — Holds taker funds during settlement. Handles the full order lifecycle: execute, fill, settle, reclaim.
-- **GauloiDisputes** — Any staked maker can challenge a fill claim by posting a bond. Resolution is M/N attestation signatures from the staked maker set — same security model as optimistic rollups (single honest challenger assumption).
+- **GauloiDisputes** — Bonded challenges against fill claims, and their resolution. The resolution mechanism is being redesigned — see [Trust model](#trust-model) and the [v0.2 spec](#v02-spec-provable-settlement) below for what is deployed today versus where this is going.
+- **GauloiFillRegistry** *(v0.2, [#53](https://github.com/cdrn/gauloi-v2/issues/53))* — Destination-side registry that makes fills canonical on-chain facts.
 
 **Settlement flow:**
 
@@ -31,31 +35,108 @@ The taker pays zero gas — they sign an [EIP-712](https://eips.ethereum.org/EIP
 ### Settlement lifecycle
 
 1. **Taker signs order** — EIP-712 typed data specifying input token/amount, desired output, destination chain/address, expiry, and a random nonce. Zero gas.
-2. **Maker executes order** — Calls `executeOrder` with the signed order. The contract verifies the taker's signature, pulls tokens from the taker into escrow, and records a `Commitment` (3 storage slots: taker+state, maker+deadlines, fillTxHash). The maker now has until the commitment deadline to deliver.
-3. **Maker fills on destination chain** — Sends the output token to the taker's destination address on chain B. This is a normal token transfer, no protocol contract needed on the destination.
+2. **Maker executes order** — Calls `executeOrder` with the signed order. The contract verifies the taker's signature, pulls tokens from the taker into escrow, and records a `Commitment`. The maker now has until the commitment deadline to deliver.
+3. **Maker fills on destination chain** — Sends the output token to the taker's destination address on chain B. In v0.1 this is a bare token transfer; in v0.2 it routes through the `GauloiFillRegistry`, which records the fill keyed by intent ID.
 4. **Maker submits fill evidence** — Calls `submitFill` on chain A with the destination transaction hash. This starts the dispute window.
 5. **Dispute window passes** — If nobody challenges, anyone can call `settle` to release the escrowed tokens to the maker.
 6. **Taker reclaims on timeout** — If the maker fails to fill before the commitment deadline, the taker calls `reclaimExpired` to get their tokens back.
 
 ### Economic incentives
 
-**Makers are honest because fraud costs more than it's worth.** A maker stakes USDC to participate, and their concurrent fill exposure is capped by their stake. Attempting a fraudulent fill (claiming delivery without actually sending tokens) risks their *entire* stake being slashed — not just the fill amount. A maker with 500k staked who tries to steal 100k on a single fill risks the full 500k. The expected value of fraud is `(1-P) * fill - P * stake`, where P (probability of getting caught) approaches 1 because verification is a single RPC call.
+**Fraud is unprofitable when detection works.** A maker's concurrent fill exposure is capped by their stake, and a fill judged fraudulent is slashed on a curve: `min(stake, fill × min(15, 2 + 650/fill_in_USDC))` — at least 2× the fill for large fills, up to 15× for small ones, so salami-slicing fraud into tiny fills is punished disproportionately. A maker stealing 100k risks at least 200k of stake.
 
-**Challengers are incentivized to watch.** Any staked maker can dispute a fill claim by posting a bond. If the fill is fraudulent, the challenger gets rewarded from the slashed stake. Since checking a fill is trivial (does this tx hash exist with the right parameters on chain B?), staked makers can passively monitor every fill at negligible cost. You only need one honest watcher — same security assumption as optimistic rollups.
+**Challengers are incentivized to watch.** Disputing a fill claim requires posting a bond; a successful challenge returns the bond plus a share of the slash. Checking a fill is trivial for anyone already watching both chains — which every maker is. In v0.1, one honest challenger is *necessary but not sufficient*: the challenge still has to win a vote (see [Trust model](#trust-model)). In v0.2, one honest challenger is sufficient — a challenged fill with no proof of delivery resolves against the maker.
 
-**Dispute spam is unprofitable.** The dispute bond — `max(0.5% of fill, min bond)` — is forfeited if the fill turns out to be valid. Frivolous disputes cost the attacker real capital with no upside.
+**Dispute spam is unprofitable.** The dispute bond — `max(0.5% of fill, min bond)` — is forfeited if the fill turns out to be valid, with half of it compensating the wrongly-accused maker.
 
-**Attestors are the makers themselves.** Resolution uses M/N signatures from the staked maker set. No separate attestor class, no governance token. Makers already have the infrastructure (watching multiple chains), economic alignment (their own fills depend on system integrity), and capital at risk (incorrect attestation = slashing). Stablecoin fill verification is objectively binary — the transaction either exists with the right parameters or it doesn't.
-
-**Pricing is competitive, not algorithmic.** Makers quote spreads via off-chain RFQ, not an AMM curve. Multiple makers see each order and compete on price — the taker picks the best quote. Spreads reflect real costs: gas on the destination chain, capital lockup during the settlement window, finality risk for the specific chain pair, and the maker's own compliance overhead. Stablecoin pairs have tight natural bounds (both sides are ~$1), so there's no impermanent loss and spreads stay in the low single-digit basis points. Makers who misprice get outcompeted; makers who price accurately earn volume.
+**Pricing is competitive, not algorithmic.** Makers quote spreads via off-chain RFQ, not an AMM curve. Multiple makers see each order and compete on price — the taker picks the best quote. Spreads reflect real costs: gas on the destination chain, capital lockup during the settlement window, finality risk for the specific chain pair, residual trust in the corridor's adjudication (see the corridor table below), and the maker's own compliance overhead. Stablecoin pairs have tight natural bounds, so spreads stay in the low single-digit basis points on clean corridors.
 
 **Compliance at the maker level.** Makers screen counterparties and price risk into their spread. The protocol doesn't enforce KYC — it provides the settlement infrastructure, and makers operate within their own regulatory framework.
 
 ### Stake capacity and oracle integration
 
-A maker's available fill capacity is not simply their staked amount — it's their stake value adjusted by a Chainlink USDC/USD price feed, minus any outstanding fill exposure. The oracle can only *reduce* capacity below 1:1 (if USDC trades below peg), never inflate it above face value. This prevents a depegging stablecoin from creating phantom capacity. If the oracle feed goes stale (beyond a configurable threshold), capacity queries revert and the maker cannot accept new orders until the feed recovers.
+A maker's available fill capacity is their stake value adjusted by a Chainlink USDC/USD price feed, minus outstanding fill exposure. The oracle can only *reduce* capacity below 1:1 (if USDC trades below peg), never inflate it above face value. If the feed goes stale beyond a configurable threshold, capacity queries revert and the maker cannot accept new orders until the feed recovers.
 
-### Off-chain RFQ flow
+## Trust model
+
+Stated plainly, per version — because for a settlement protocol the trust model *is* the product, and it should be checkable against the code.
+
+**v0.1 (deployed today):** disputes are resolved by a stake-weighted vote of staked makers other than the disputed maker and the challenger, with a 30% participation quorum. Attestations carry rewards for the winning side but **no slashing for the losing side** — voting wrong is costless. An unresolved dispute defaults to fill-valid; a dispute that twice fails quorum pauses the escrow and defaults to fill-valid. Only staked makers may challenge. The practical consequences: the mechanism assumes a large, diligent, non-colluding maker set, which does not exist yet; with few makers, quorum is unreachable and every dispute terminates in the fill-valid default. **v0.1 is safe under a single trusted operator — which is what currently runs it — and should not be trusted beyond that.** This is the honest reading of the deployed code, and it is why v0.2 exists.
+
+**v0.2 (spec below):** detection and judgment are separated. Anyone may challenge (bonded). Judgment terminates in a per-corridor **resolver** — an on-chain storage proof where the corridor supports it, a named M-of-N council where it doesn't. A challenged fill with no successful defense resolves **against the maker**. There is no vote.
+
+| Corridor class | Terminal arbiter | Unresolved default | Settlement window |
+|---|---|---|---|
+| Provable (e.g. fills on Ethereum, escrow on Arbitrum) | Storage proof of the FillRegistry | Challenged + no proof → **invalid**, taker refunded | Shrinks toward destination finality |
+| Council (unprovable corridors; bootstrap everywhere) | Named M-of-N EIP-712 council | Challenged + no verdict → **invalid**, taker refunded | Wider; residual trust priced into spread |
+| v0.1 vote *(being removed)* | Stake-weighted maker poll | **Valid**, maker paid | Fixed global |
+
+## v0.2 spec: provable settlement
+
+Umbrella issue: [#2](https://github.com/cdrn/gauloi-v2/issues/2). This section is the living spec; the blog posts in `docs/` are historic design artifacts and are not updated.
+
+### Why the validator set is removed
+
+Three structural problems, none fixable with parameters:
+
+1. **Votes are costless.** Losing-side attestors are not slashed. A validator set works because wrong votes destroy stake; without that, this is a poll with rewards on one side.
+2. **The jury is conflicted by construction.** Attestors are the disputed maker's competitors (an incentive to convict rivals — a slash removes competition permanently) or cartel partners (an incentive to acquit). Maker markets are capital-intensive and power-law distributed; the set will be small and correlated. Bundling truth-attestation with market-making caps oracle security at market structure.
+3. **The recursion argument.** A vote is only sound if wrong votes can eventually be punished — which requires a terminal arbiter beneath the vote (a proof or an accountable adjudicator). If that arbiter exists, the vote is redundant. If it doesn't, the vote is unsound. Either way the vote cannot be load-bearing. (Adding a second vote layer to slash the first — the design explored in [#31](https://github.com/cdrn/gauloi-v2/issues/31) — recurses the same problem and is superseded by this spec.)
+
+What survives: makers as the **detection** layer. They already run infrastructure watching every chain, so bonded challenges with slash-share bounties align them as watchmen. Detection wants many self-interested eyes; judgment wants finality. v0.2 keeps the eyes and replaces the gavel.
+
+### GauloiFillRegistry ([#53](https://github.com/cdrn/gauloi-v2/issues/53))
+
+A small destination-side contract that makes fills canonical, unique facts:
+
+```solidity
+function fill(bytes32 intentId, address token, address recipient, uint256 amount) external;
+```
+
+- Reverts if `intentId` was already filled — one fill per intent, one intent per fill. This kills double-claiming, where one destination transfer is presented as evidence for two identical orders.
+- Transfers `token` from the filler to `recipient` and stores a single-slot commitment: `fills[intentId] = keccak256(abi.encode(token, recipient, amount, msg.sender, block.number))`.
+- Single-slot by design: a storage proof needs to prove exactly one slot. Verifiers receive the preimage as evidence, recompute the hash, and check `amount >= order.minOutputAmount` plus token/recipient equality — the inequality check is why the preimage travels alongside the proof rather than being verified inside the hash.
+
+Purely additive: under v0.1 it already turns dispute verification from log-interpretation into an existence check, and it is the foundation everything else stands on.
+
+### Disputes v2 ([#54](https://github.com/cdrn/gauloi-v2/issues/54))
+
+- **Permissionless challenges.** `challenge(order)` requires a bond, not a maker stake. The taker — the actual victim of a fraudulent fill — and any third-party watcher can dispute. The bond alone gates griefing.
+- **Maker must defend.** A challenged fill unresolved by the deadline resolves **invalid**: taker refunded from escrow, maker slashed on the existing curve. This inverts v0.1's fill-valid default, and it is safe *because of the registry*: an honest maker always has an unambiguous defense, so silence can safely convict. Low challenger turnout now hurts fraudsters instead of victims.
+- **Resolver routing.** Resolution forwards to the corridor's resolver:
+
+```solidity
+interface IResolver {
+    enum Verdict { Pending, Valid, Invalid }
+    function resolve(bytes32 intentId, DataTypes.Order calldata order, bytes calldata evidence)
+        external returns (Verdict);
+}
+```
+
+- **Deleted:** attestor recording, stake-weight snapshots, quorum tracking and extension, the two-strikes global escrow pause.
+- **Kept:** the slash curve, the bond formula, per-intent order storage. Splits become: verdict valid → challenger bond 50% to maker / 50% to treasury; verdict invalid → challenger refunded plus 25% of the slash, 75% to treasury.
+- **Escrow unchanged.** `setDisputed` / `resolveValid` / `resolveInvalid` already make escrow agnostic to how truth is decided. Migration is a Disputes redeploy plus `setDisputes()` on Escrow and Staking.
+
+### Resolvers
+
+**CouncilResolver ([#55](https://github.com/cdrn/gauloi-v2/issues/55))** — M-of-N EIP-712 verdicts from a named, on-chain-registered council. Honest centralization, honestly labeled: members are publicly identified and accountable, which is what institutional diligence actually prefers over an anonymous stake poll. Bootstrap council is the deployer key, stated plainly here until it isn't. A corridor graduates council → proof with one owner call; the council automatically loses jurisdiction wherever proofs exist.
+
+**ProofResolver ([#56](https://github.com/cdrn/gauloi-v2/issues/56))** — verifies an MPT storage proof that the destination registry holds the expected commitment, against a destination block hash known on the source chain. Ships first for the natively provable direction: fills on Ethereum proven on Arbitrum via the L1 block hash exposed to L2 contracts — no third party, minutes of latency. The reverse direction (Arbitrum fills proven on Ethereum) waits on rollup confirmation (~1 week) — acceptable for a *defense* with an extended proof deadline (slow appeals court, fast trial court), compressible later with a ZK light client; the council covers that direction meanwhile. A proof verdict is terminal and overrides any council verdict.
+
+### Corridor economics ([#57](https://github.com/cdrn/gauloi-v2/issues/57), [#58](https://github.com/cdrn/gauloi-v2/issues/58))
+
+The settlement window is an insurance premium priced by corridor verifiability, so it becomes per-corridor: provable corridors shrink toward destination finality; council corridors stay wide and price the residual trust into the spread. Maker capital velocity scales directly (destination float ≈ flow × window). A protocol fee switch (`feeBps`, default 0, hard-capped) lands in `settle`/`resolveValid` alongside an explicit treasury address, so it is in place — and audited — before it is ever non-zero.
+
+### Delivery phases
+
+| Phase | Issues | Deliverable |
+|---|---|---|
+| 1 | [#53](https://github.com/cdrn/gauloi-v2/issues/53) | FillRegistry deployed both chains; maker bot fills through it (additive, no breaking change) |
+| 2 | [#54](https://github.com/cdrn/gauloi-v2/issues/54), [#55](https://github.com/cdrn/gauloi-v2/issues/55) | Disputes v2 with CouncilResolver; vote machinery deleted; redeploy + `setDisputes` swap |
+| 3 | [#56](https://github.com/cdrn/gauloi-v2/issues/56) | ProofResolver; Ethereum-fill corridor graduates to trustless resolution |
+| 4 | [#57](https://github.com/cdrn/gauloi-v2/issues/57), [#58](https://github.com/cdrn/gauloi-v2/issues/58) | Per-corridor windows; fee switch; then external audit and the mainnet checklist ([#3](https://github.com/cdrn/gauloi-v2/issues/3)) |
+
+## Off-chain RFQ flow
 
 ```
 Taker                    Relay                    Maker
@@ -151,7 +232,7 @@ Environment variables are configured via `.env.local` files in each package. See
 
 ## Gas Costs
 
-Measured with `forge snapshot --match-contract GasBenchmark` (Solc 0.8.24, optimizer 200 runs).
+Measured with `forge snapshot --match-contract GasBenchmark` (Solc 0.8.24, optimizer 200 runs). Dispute rows reflect the v0.1 vote mechanism and will change with [#54](https://github.com/cdrn/gauloi-v2/issues/54).
 
 | Operation | Gas | Amortised |
 |-----------|-----|-----------|
@@ -174,4 +255,4 @@ Run `forge snapshot --match-contract GasBenchmark --diff` to check for regressio
 
 ## Design
 
-See `docs/blog-part1-architecture.md` for the full architecture rationale and `docs/blog-part2-mechanism-design.md` for dispute resolution, bond economics, and settlement window analysis.
+`docs/blog-part1-architecture.md` and `docs/blog-part2-mechanism-design.md` are the original v0.1 design writings, kept as historic artifacts — they describe the thinking at the time, including the maker-attestation mechanism this spec replaces. The current spec is this README.
