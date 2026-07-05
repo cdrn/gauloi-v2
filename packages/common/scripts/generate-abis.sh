@@ -39,6 +39,7 @@ extract_abi "GauloiEscrow"
 extract_abi "GauloiDisputes"
 extract_abi "GauloiFillRegistry"
 extract_abi "CouncilResolver"
+extract_abi "ProofResolver"
 
 # Generate barrel export
 cat > "$ABI_DIR/index.ts" << 'EOF'
@@ -47,6 +48,7 @@ export { GauloiEscrowAbi } from "./GauloiEscrow.js";
 export { GauloiDisputesAbi } from "./GauloiDisputes.js";
 export { GauloiFillRegistryAbi } from "./GauloiFillRegistry.js";
 export { CouncilResolverAbi } from "./CouncilResolver.js";
+export { ProofResolverAbi } from "./ProofResolver.js";
 EOF
 
 echo "ABI generation complete"
