@@ -89,11 +89,19 @@ contract Deploy is Script {
         escrow.setTreasury(treasury);
         escrow.addSupportedToken(usdc);
 
-        // Wire the corridor's resolver (destination chain served from this chain)
+        // Wire the corridor's resolver (destination chain served from this chain).
+        // Council is the default/bootstrap arbiter. A corridor graduates to the
+        // trustless ProofResolver later — that needs an audited IFillProofVerifier
+        // (ZK light client / Axiom / Herodotus) chosen per deployment, so it is
+        // NOT deployed here. To graduate a corridor:
+        //   ProofResolver pr = new ProofResolver(auditedVerifier, address(escrow), owner);
+        //   pr.configureCorridor(destChainId, destFillRegistry, FILLS_SLOT);
+        //   disputes.setResolver(destChainId, address(pr));
+        // FILLS_SLOT is pinned by ProofResolver.t.sol:test_fillSlot_matchesRegistryLayout.
         uint256 destChainId = vm.envOr("DEST_CHAIN_ID", uint256(0));
         if (destChainId != 0) {
             disputes.setResolver(destChainId, address(council));
-            console.log("Resolver wired for corridor:", destChainId);
+            console.log("Council resolver wired for corridor:", destChainId);
         }
 
         vm.stopBroadcast();
